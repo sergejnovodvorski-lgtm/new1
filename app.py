@@ -2,7 +2,8 @@ import streamlit as st
 import gspread
 import pandas as pd
 import json
-from datetime import datetime
+import re 
+from datetime import datetime, timedelta
 import time
 import urllib.parse 
 
@@ -38,6 +39,7 @@ st.set_page_config(
 def get_gsheet_client():
     """Подключается к Google Sheets API через Сервисный Аккаунт (используя st.secrets)."""
     
+    # ❗ ИСПОЛЬЗУЕМ st.secrets ВМЕСТО secrets.json
     if "gcp_service_account" not in st.secrets:
         st.error("Ошибка: Секрет 'gcp_service_account' не найден в Streamlit Secrets.")
         st.stop() 
@@ -128,296 +130,56 @@ def save_data_to_gsheets(data_row):
         return False
 
 
+
+
 # =========================================================
-# 4. БЛОК 1: ОСНОВНЫЕ ДАННЫЕ (ВВЕРХУ)
+# 4. ФУНКЦИЯ ПАРСИНГА ПЕРЕПИСКИ
 # =========================================================
 
 
-st.title("Система Управления Заявками")
-st.markdown("---")
-
-
-# --- ФОРМА 1: Сбор основных реквизитов ---
-with st.form(key='data_form_main'):
-
-
-    st.header("1. Основные Данные")
+def parse_conversation(text, price_items):
+    """
+    Базовая функция для извлечения данных из текста переписки.
+    """
     
-    col1, col2 = st.columns(2)
+    # 1. Извлечение номера телефона (Поиск по частоте)
     
-    with col1:
-        # Номер Заявки
-        st.text_input("Номер Заявки", key="k_order_number", 
-                      value=st.session_state.get("k_order_number", ""))
-        
-        # Телефон
-        st.text_input("Телефон клиента (для согласования)", key="k_client_phone",
-                      value=st.session_state.get("k_client_phone", ""))
-        
-        # Источник Заявки
-        source_options = ["Сайт", "Звонок", "Партнер", "Прочее"]
-        source_index = source_options.index(st.session_state.get("k_source", source_options[0]))
-        st.selectbox("Источник Заявки", source_options, index=source_index, key="k_source")
-
-
-
-
-    with col2:
-        # Статус Заявки
-        status_options = ["Новая", "В работе", "Закрыта", "Согласована (Клиент)"] 
-        status_index = status_options.index(st.session_state.get("k_status", status_options[0]))
-        st.selectbox("Статус Заявки", status_options, index=status_index, key="k_status")
-        
-        # Дата Создания
-        if 'k_date_created' not in st.session_state:
-            st.session_state.k_date_created = datetime.today().date()
+    # Ищем все возможные 10-значные номера, окруженные префиксами (+7, 8, 7) и разделителями
+    phone_matches = re.findall(r'(?:\+7|8|\b7)?\s*\(?\s*(\d{3})\s*\)?\s*(\d{3})[-\s]*(\d{2})[-\s]*(\d{2})', text)
+    
+    if phone_matches:
+        phone_counts = {}
+        for match in phone_matches:
+            # Нормализуем найденный номер до формата 7ХХХХХХХХХХ
+            normalized_phone = "7" + "".join(match)
             
-        st.date_input("Дата Создания Заявки", 
-                      value=st.session_state.k_date_created,
-                      key="k_date_created")
-                      
-        # ❗ НОВОЕ ПОЛЕ: Дата доставки
-        if 'k_date_delivery' not in st.session_state:
-             st.session_state.k_date_delivery = datetime.today().date()
-        st.date_input("❗ Дата доставки", 
-                      value=st.session_state.k_date_delivery,
-                      key="k_date_delivery")
-                                     
-        # Приоритет
-        st.slider("Приоритет", 1, 5, st.session_state.get("k_priority", 3), key="k_priority")
-
-
-    # Форма должна быть закрыта здесь
-    st.form_submit_button("Сохранить данные (Обновить форму)", type="primary")
-
-
-# КОНЕЦ ФОРМЫ 1
-
-
-# =========================================================
-# 5. БЛОК 2: КАЛЬКУЛЯТОР СТОИМОСТИ ЗАЯВКИ
-# =========================================================
-st.markdown("---")
-st.header("2. Калькулятор Стоимости Заявки") 
-
-
-add_item = st.button("➕ Добавить позицию в расчет")
-if add_item:
-    st.session_state.calculator_items.append({"item": price_items[0], "qty": 1})
-    st.rerun()
-
-
-total_cost = 0
-
-
-for i, item_data in enumerate(st.session_state.calculator_items):
-    
-    col_item, col_qty, col_price, col_remove = st.columns([4, 1, 1, 0.5])
-
-
-    with col_item:
-        index = price_items.index(item_data["item"]) if item_data["item"] in price_items else 0
-        selected_item = st.selectbox(
-            f"Позиция {i}", 
-            price_items, 
-            index=index,
-            key=f"item_{i}",
-            label_visibility="collapsed"
-        )
-        st.session_state.calculator_items[i]["item"] = selected_item
-
-
-    with col_qty:
-        quantity = st.number_input(
-            f"Кол-во {i}", 
-            min_value=1, 
-            value=item_data["qty"], 
-            step=1,
-            key=f"qty_{i}",
-            label_visibility="collapsed"
-        )
-        st.session_state.calculator_items[i]["qty"] = int(quantity)
-        
-    cost = 0
-    if selected_item != price_items[0] and not price_df.empty:
-        price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
-        if not price_row.empty and 'ЦЕНА' in price_row.columns:
-            try:
-                price = price_row['ЦЕНА'].iloc[0]
-                cost = float(price) * int(quantity)
-                total_cost += cost
-            except ValueError:
-                 st.warning(f"Ошибка: Цена для '{selected_item}' не является числом.")
-                 cost = 0
-    
-    with col_price:
-        st.metric(f"Стоимость {i}", f"{cost:,.0f} ₽", label_visibility="collapsed")
-        
-    with col_remove:
-        st.text("") 
-        if st.button("🗑️", key=f"remove_{i}"):
-            st.session_state.calculator_items.pop(i)
-            st.rerun() 
-
-
-st.markdown("---")
-st.subheader(f"ИТОГО: {total_cost:,.0f} ₽") 
-
-
-# =========================================================
-# 6. БЛОК 3: КОММЕНТАРИЙ И КНОПКА ОТПРАВКИ
-# =========================================================
-
-
-st.header("3. Дополнительная информация")
-
-
-comment = st.text_area(
-    "Комментарий к заявке (достаточно большое поле)",
-    key="k_comment",
-    value=st.session_state.get("k_comment", ""),
-    height=200 
-)
-
-
-st.markdown("---")
-
-
-# =========================================================
-# 7. НОВАЯ ЛОГИКА: СОГЛАСОВАНИЕ ЧЕРЕЗ WHATSAPP (ОБНОВЛЕНО!)
-# =========================================================
-
-
-def generate_whatsapp_message(total_cost):
-    """Формирует текст сообщения для WhatsApp, собирая данные из session_state."""
-    
-    # Форматируем даты для читабельности
-    date_created_str = st.session_state.k_date_created.strftime("%Y-%m-%d")
-    date_delivery_str = st.session_state.k_date_delivery.strftime("%Y-%m-%d")
-    
-    # 1. Формируем список товаров
-    items_list = []
-    for item in st.session_state.calculator_items:
-        if item["item"] != "--- Выберите позицию ---":
-            price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == item["item"]]
-            # Безопасное извлечение цены
-            price = price_row['ЦЕНА'].iloc[0] if not price_row.empty and 'ЦЕНА' in price_row.columns else 0
+            # Считаем частоту
+            phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
             
-            cost_item = float(price) * item["qty"]
-            items_list.append(f"- {item['item']} ({item['qty']} шт.) - {cost_item:,.0f} ₽")
-    
-    items_text = "\n".join(items_list) if items_list else "Отсутствует"
-    
-    # 2. Формируем основной текст сообщения
-    message = f"""
-*ЗАЯВКА НА СОГЛАСОВАНИЕ*
-_________________________________________
-
-
-*Основные реквизиты заявки:*
-Номер заявки: {st.session_state.get('k_order_number', 'БЕЗ НОМЕРА')}
-Телефон клиента: {st.session_state.get('k_client_phone', 'Не указан')}
-Дата создания: {date_created_str}
-Дата доставки: {date_delivery_str}
-Источник: {st.session_state.get('k_source', 'Не указан')}
-Статус: {st.session_state.get('k_status', 'Новая')}
-Приоритет: {st.session_state.get('k_priority', 3)}
-
-
-*Детали заказа:*
-{items_text}
-
-
-*ИТОГО к согласованию:* {total_cost:,.0f} ₽
-_________________________________________
-
-
-*Комментарий менеджера:*
-{st.session_state.get('k_comment', 'Нет')}
-
-
-Прошу подтвердить, что указанные параметры и итоговая сумма верны.
-"""
-    return message.strip()
-
-
-# --- Кнопка для отправки сообщения ---
-col_wa, col_save = st.columns([1, 1])
-
-
-with col_wa:
-    if st.button("💬 СОГЛАСОВАТЬ заявку с клиентом (WhatsApp)", type="secondary", use_container_width=True):
+        # Находим самый часто встречающийся номер (берем первый элемент кортежа - сам номер)
+        most_frequent_item = max(phone_counts.items(), key=lambda item: item[1]) 
+        phone = most_frequent_item[0]
+        count = most_frequent_item[1]
         
-        # Проверка обязательных полей для WhatsApp
-        if not st.session_state.get('k_client_phone'):
-            st.error("Пожалуйста, заполните поле 'Телефон клиента' для формирования ссылки WhatsApp.")
+        st.session_state['k_client_phone'] = phone
+        st.info(f"✅ Телефон клиента (Найден {count} раз): **{phone}**")
+    
+    # 2. Извлечение номера заявки
+    order_match = re.search(r'(?:заявк[аи]|заказ|счет|№)\s*(\d+)', text, re.IGNORECASE)
+    if order_match:
+        st.session_state['k_order_number'] = order_match.group(1)
+        st.info(f"✅ Номер Заявки: {order_match.group(1)}")
+        
+    # 3. Извлечение даты доставки
+    delivery_date = None
+    if re.search(r'достав[итье]|нужно\s*к|дата\s*доставк[и]', text, re.IGNORECASE):
+        if re.search(r'завтра', text, re.IGNORECASE):
+            delivery_date = datetime.today().date() + timedelta(days=1)
+        elif re.search(r'послезавтра', text, re.IGNORECASE):
+            delivery_date = datetime.today().date() + timedelta(days=2)
         else:
-            message_text = generate_whatsapp_message(total_cost)
-            
-            # Кодируем текст для URL
-            encoded_message = urllib.parse.quote(message_text)
-            
-            # Формируем полную ссылку
-            wa_link = f"https://wa.me/{st.session_state.k_client_phone}?text={encoded_message}"
-            
-            # ❗ Отображаем ссылку, которую можно нажать
-            st.markdown(
-                f'<a href="{wa_link}" target="_blank" style="display: block; width: 100%; padding: 10px; background-color: #25D366; color: white; text-align: center; text-decoration: none; border-radius: 5px; font-weight: bold;">'
-                f'✅ НАЖМИТЕ ДЛЯ ПЕРЕХОДА В WHATSAPP (КЛИЕНТ: {st.session_state.k_client_phone})</a>', 
-                unsafe_allow_html=True
-            )
-            st.info("Сообщение сформировано. Нажмите на зеленую кнопку для отправки.")
-
-
-
-
-# --- ФОРМА 2: Кнопка только для сохранения данных ---
-with col_save:
-    # Используем Form Submit Button для сохранения данных
-    with st.form(key='submit_form'):
-        submitted_save = st.form_submit_button(
-            "💾 СОХРАНИТЬ ЗАЯВКУ В ТАБЛИЦУ", 
-            type="primary",
-            use_container_width=True
-        )
-
-
-if 'submitted_save' in locals() and submitted_save:
-        
-    # Проверка обязательных полей
-    if not st.session_state.get('k_order_number') and not st.session_state.get('k_client_phone'):
-        st.error("Пожалуйста, заполните поле 'Номер Заявки' ИЛИ 'Телефон'.")
-    else:
-        # Форматирование даты
-        date_to_save = st.session_state.k_date_created.strftime("%Y-%m-%d") if hasattr(st.session_state.k_date_created, 'strftime') else str(st.session_state.k_date_created)
-        date_delivery_to_save = st.session_state.k_date_delivery.strftime("%Y-%m-%d") if hasattr(st.session_state.k_date_delivery, 'strftime') else str(st.session_state.k_date_delivery)
-
-
-        # ❗ ОБНОВЛЕННЫЙ СПИСОК ДАННЫХ ДЛЯ GOOGLE SHEETS
-        all_data = [
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # 1. Дата/Время записи
-            st.session_state.get('k_order_number', ''),   # 2. Номер Заявки
-            st.session_state.get('k_client_phone', ''),   # 3. Телефон
-            date_to_save,                                 # 4. Дата Создания
-            date_delivery_to_save,                        # 5. НОВАЯ ДАТА ДОСТАВКИ
-            st.session_state.k_source,                    # 6. Источник
-            st.session_state.k_status,                    # 7. Статус
-            st.session_state.k_priority,                  # 8. Приоритет
-            total_cost,                                   # 9. Итоговая стоимость
-            st.session_state.get('k_comment', '')         # 10. Комментарий
-        ]
-        
-        # Запись данных
-        if save_data_to_gsheets(all_data):
-            st.success("✅ Заявка успешно сохранена в Google Таблице!")
-            
-            # Очистка состояния
-            for key in list(st.session_state.keys()):
-                if key.startswith('k_'):
-                    del st.session_state[key]
-                    
-            st.session_state.calculator_items = []
-            time.sleep(1) 
-            st.rerun() 
-        else:
-            st.error("Произошла ошибка при записи данных. Проверьте права доступа к листу 'ЗАЯВКИ'.")
+             # Попытка найти формат ДД.ММ.ГГГГ или ДД.ММ
+            date_match = re.search(r'(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?', text)
+            if date_match:
+                day, month, year = date_match.groups()
+                year = year if year else str
