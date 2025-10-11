@@ -14,7 +14,7 @@ import time
 
 SPREADSHEET_NAME = "Start" 
 WORKSHEET_NAME_ORDERS = "ЗАЯВКИ"
-# УКАЖИТЕ СВОЙ НОМЕР МЕНЕДЖЕРА
+# УКАЖИТЕ СВОЙ НОМЕР МЕНЕДЖЕРА (используется только для внутренних целей, не для отправки)
 MANAGER_WHATSAPP_PHONE = "79000000000" 
 
 
@@ -123,7 +123,8 @@ def parse_conversation(text):
             normalized_phone = "7" + "".join(match)
             phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
         phone = max(phone_counts.items(), key=lambda item: item[1])[0]
-        st.session_state['k_client_phone'] = phone
+        # ❗ ИСПРАВЛЕНИЕ: Обновляем session_state, чтобы телефон заполнился в форме
+        st.session_state['k_client_phone'] = phone 
         st.info(f"✅ Телефон клиента найден: **{phone}**")
 
 
@@ -138,7 +139,7 @@ def parse_conversation(text):
 
 
 
-    # 3. Извлечение даты доставки (Парсинг без слов-маркеров)
+    # 3. Извлечение даты доставки
     delivery_date = None
     
     # ПРОВЕРКА ОТНОСИТЕЛЬНЫХ ДАТ
@@ -149,7 +150,6 @@ def parse_conversation(text):
     
     # ПРОВЕРКА КОНКРЕТНЫХ ДАТ (только если относительная дата еще не найдена)
     else:
-        # Ищет даты в форматах ДД.ММ.ГГГГ, ДД/ММ/ГГГГ, ДД.ММ, ДД/ММ
         date_match = re.search(r'(\d{1,2})[./](\d{1,2})(?:[./](\d{4}))?', text)
         if date_match:
             day, month, year = date_match.groups()
@@ -224,8 +224,9 @@ def remove_item(index):
 
 
 
-def generate_whatsapp_url(phone, order_data, total_sum):
+def generate_whatsapp_url(target_phone, order_data, total_sum):
     """Генерирует ссылку на WhatsApp с предзаполненным текстом."""
+    # Обратите внимание: target_phone теперь - это номер клиента
     text = f"✅ НОВАЯ ЗАЯВКА (CRM)\n"
     text += f"📅 Дата Ввода: {order_data['ДАТА_ВВОДА']}\n"
     text += f"🆔 Номер Заявки: {order_data['НОМЕР_ЗАЯВКИ']}\n"
@@ -237,26 +238,37 @@ def generate_whatsapp_url(phone, order_data, total_sum):
     
     # Кодирование текста для URL
     encoded_text = urllib.parse.quote(text)
-    return f"https://wa.me/{phone}?text={encoded_text}"
+    # ❗ ИЗМЕНЕНИЕ: Отправляем на target_phone (номер клиента)
+    return f"https://wa.me/{target_phone}?text={encoded_text}"
 
 
 
 
 def display_whatsapp_notification(total_sum, order_items_text, form_data):
     """Генерирует и отображает кнопку WhatsApp, не сохраняя данные в GS."""
+    
+    # Телефон клиента, на который будет отправлено сообщение
+    client_phone_for_wa = form_data['client_phone']
+    
+    if not client_phone_for_wa:
+        st.error("Нельзя отправить уведомление: не указан Телефон клиента.")
+        return
+
+
     whatsapp_data = {
         'ДАТА_ВВОДА': datetime.now().strftime("%d.%m.%Y %H:%M"),
         'НОМЕР_ЗАЯВКИ': form_data['order_number'],
-        'ТЕЛЕФОН': form_data['client_phone'],
+        'ТЕЛЕФОН': client_phone_for_wa,
         'АДРЕС': form_data['client_address'],
         'ДАТА_ДОСТАВКИ': form_data['delivery_date'].strftime("%d.%m.%Y"),
         'ЗАКАЗ': order_items_text,
     }
     
-    whatsapp_link = generate_whatsapp_url(MANAGER_WHATSAPP_PHONE, whatsapp_data, total_sum)
+    # ❗ ИЗМЕНЕНИЕ: Передаем номер клиента в функцию генерации URL
+    whatsapp_link = generate_whatsapp_url(client_phone_for_wa, whatsapp_data, total_sum)
     
     st.success("Сообщение для согласования готово!")
-    st.markdown(f"**Нажмите, чтобы отправить уведомление менеджеру ({MANAGER_WHATSAPP_PHONE}):**")
+    st.markdown(f"**Нажмите, чтобы отправить заказ клиенту ({client_phone_for_wa}):**")
     st.link_button("📲 ОТПРАВИТЬ В WHATSAPP", whatsapp_link, type="primary")
 
 
@@ -344,6 +356,7 @@ else:
             st.subheader("Контакты")
             client_phone = st.text_input(
                 "Телефон", 
+                # ❗ ИСПРАВЛЕНИЕ: Значение берется из session_state, который был обновлен парсером
                 value=st.session_state.k_client_phone, 
                 key='client_phone_input'
             )
@@ -414,7 +427,6 @@ else:
                     display_whatsapp_notification(total_sum, order_items_text, form_data)
                 
                 if save_button:
-                    # Бизнес-процесс: сохранение
                     save_order_to_gsheets(total_sum, order_items_text, form_data)
 
 
