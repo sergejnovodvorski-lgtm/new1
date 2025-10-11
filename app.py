@@ -4,6 +4,7 @@ import pandas as pd
 import json
 from datetime import datetime
 import time
+import urllib.parse 
 
 
 # =========================================================
@@ -12,10 +13,12 @@ import time
 
 
 # --- ОБЯЗАТЕЛЬНО ИСПРАВИТЬ! ---
-# 1. ТОЧНОЕ ИМЯ ВАШЕЙ ТАБЛИЦЫ В GOOGLE DRIVE
 SPREADSHEET_NAME = "Start" 
-# 2. НАЗВАНИЕ ЛИСТА ДЛЯ ЗАПИСИ ЗАЯВОК
 WORKSHEET_NAME_ORDERS = "ЗАЯВКИ"
+
+
+# ❗ НОМЕР ТЕЛЕФОНА (WhatsApp) ВАШЕГО МЕНЕДЖЕРА/ОТДЕЛЯ, КУДА БУДЕТ ОТПРАВЛЯТЬСЯ ССЫЛКА
+MANAGER_WHATSAPP_PHONE = "79000000000" 
 # ------------------------------
 
 
@@ -35,18 +38,16 @@ st.set_page_config(
 def get_gsheet_client():
     """Подключается к Google Sheets API через Сервисный Аккаунт (используя st.secrets)."""
     
-    # 1. Проверяем наличие ключа 'gcp_service_account' в st.secrets
     if "gcp_service_account" not in st.secrets:
         st.error("Ошибка: Секрет 'gcp_service_account' не найден в Streamlit Secrets.")
-        st.error("Убедитесь, что вы добавили содержимое JSON-ключа в файл .streamlit/secrets.toml или в настройки Streamlit Cloud.")
-        return None
+        st.stop() 
         
     try:
-        # 2. Используем данные из st.secrets для аутентификации gspread
         gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
         return gc
     except Exception as e:
         st.error(f"Ошибка аутентификации gspread. Проверьте содержимое секрета 'gcp_service_account'. Ошибка: {e}")
+        st.stop()
         return None
 
 
@@ -54,7 +55,7 @@ def get_gsheet_client():
 def load_price_list():
     """Загружает лист 'ПРАЙС' в DataFrame pandas."""
     gc = get_gsheet_client()
-    if not gc: return pd.DataFrame()
+    if not gc: return pd.DataFrame() 
         
     try:
         sh = gc.open(SPREADSHEET_NAME) 
@@ -69,13 +70,15 @@ def load_price_list():
     
     except gspread.exceptions.SpreadsheetNotFound:
         st.error(f"Ошибка: Google Таблица с именем '{SPREADSHEET_NAME}' не найдена. Проверьте название.")
-        return pd.DataFrame()
+        st.stop()
     except gspread.exceptions.WorksheetNotFound:
         st.error("Ошибка: Лист 'ПРАЙС' не найден. Убедитесь в правильности названия.")
-        return pd.DataFrame()
+        st.stop()
     except Exception as e:
         st.error(f"Неизвестная ошибка при загрузке прайса (проверьте заголовки: НАИМЕНОВАНИЕ и ЦЕНА). Ошибка: {e}")
-        return pd.DataFrame()
+        st.stop()
+        
+    return pd.DataFrame()
 
 
 @st.cache_resource
@@ -88,28 +91,19 @@ def get_orders_worksheet():
         return sh.worksheet(WORKSHEET_NAME_ORDERS)
     except Exception as e:
         st.error(f"Ошибка доступа к листу '{WORKSHEET_NAME_ORDERS}'. Проверьте права доступа сервисного аккаунта! Ошибка: {e}")
+        st.stop()
         return None
 
 
 # Инициализация
-price_df = load_price_list()
-# Убран старый костыль SPREADSHEET_NAME != "CRM/ЗАЯВКИ + КАЛЬКУЛЯТОР"
-if price_df.empty: 
-    # Если загрузить прайс не удалось, то дальнейшая работа невозможна (ошибки уже выведены)
-    # Однако, если SPREADSHEET_NAME = "Start" (дефолт), то st.stop() не сработает
-    # Добавим более строгое условие, чтобы избежать проблем
-    if not get_gsheet_client() is None: # Останавливаемся только если не удалось загрузить данные при рабочем клиенте
-        st.stop() 
-
-
+price_df = load_price_list() 
 orders_ws = get_orders_worksheet()
-# Убран старый костыль WORKSHEET_NAME_ORDERS != "ЗАЯВКИ"
-if not orders_ws:
-    if not get_gsheet_client() is None:
-        st.stop() 
 
 
-price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist()
+if price_df.empty: 
+    price_items = ["--- Выберите позицию ---"]
+else:
+    price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist()
 
 
 if 'calculator_items' not in st.session_state:
@@ -135,7 +129,7 @@ def save_data_to_gsheets(data_row):
 
 
 # =========================================================
-# 4. ФОРМА ВВОДА (50-60 РЕКВИЗИТОВ)
+# 4. БЛОК 1: ОСНОВНЫЕ ДАННЫЕ (ВВЕРХУ)
 # =========================================================
 
 
@@ -143,107 +137,93 @@ st.title("Система Управления Заявками")
 st.markdown("---")
 
 
-# --- ФОРМА 1: Сбор 50-60 реквизитов ---
-# Используем st.form, чтобы все поля обновлялись вместе
-with st.form(key='data_form'):
+# --- ФОРМА 1: Сбор основных реквизитов ---
+with st.form(key='data_form_main'):
 
 
-    # 4.1. Раздел: Основная Информация о Клиенте
     st.header("1. Основные Данные")
     
-    col1, col2, col3 = st.columns(3)
-    
-    # Инициализация для корректной работы form_submit_button без потери данных
-    # tech_fields теперь не нужен, так как данные сразу идут в st.session_state через keys
+    col1, col2 = st.columns(2)
     
     with col1:
-        client_name = st.text_input("Название Компании", key="k_client_name")
-        contact_person = st.text_input("Контактное Лицо", key="k_contact_person")
-        source = st.selectbox("Источник Заявки", ["Сайт", "Звонок", "Партнер", "Прочее"], key="k_source")
+        # Номер Заявки
+        st.text_input("Номер Заявки", key="k_order_number", 
+                      value=st.session_state.get("k_order_number", ""))
+        
+        # Телефон
+        st.text_input("Телефон клиента (для согласования)", key="k_client_phone",
+                      value=st.session_state.get("k_client_phone", ""))
+        
+        # Источник Заявки
+        source_options = ["Сайт", "Звонок", "Партнер", "Прочее"]
+        source_index = source_options.index(st.session_state.get("k_source", source_options[0]))
+        st.selectbox("Источник Заявки", source_options, index=source_index, key="k_source")
+
+
 
 
     with col2:
-        client_email = st.text_input("Email", key="k_client_email")
-        client_phone = st.text_input("Телефон", key="k_client_phone")
-        status = st.selectbox("Статус Заявки", ["Новая", "В работе", "Закрыта"], key="k_status")
-
-
-    with col3:
-        city = st.text_input("Город/Регион", key="k_city")
-        # Убедимся, что k_date_created инициализирована, иначе st.date_input может выбросить ошибку
+        # Статус Заявки
+        status_options = ["Новая", "В работе", "Закрыта", "Согласована (Клиент)"] 
+        status_index = status_options.index(st.session_state.get("k_status", status_options[0]))
+        st.selectbox("Статус Заявки", status_options, index=status_index, key="k_status")
+        
+        # Дата Создания
         if 'k_date_created' not in st.session_state:
             st.session_state.k_date_created = datetime.today().date()
             
-        date_created = st.date_input("Дата Создания Заявки", key="k_date_created")
-        priority = st.slider("Приоритет", 1, 5, 3, key="k_priority")
+        st.date_input("Дата Создания Заявки", 
+                      value=st.session_state.k_date_created,
+                      key="k_date_created")
+                      
+        # ❗ НОВОЕ ПОЛЕ: Дата доставки
+        if 'k_date_delivery' not in st.session_state:
+             st.session_state.k_date_delivery = datetime.today().date()
+        st.date_input("❗ Дата доставки", 
+                      value=st.session_state.k_date_delivery,
+                      key="k_date_delivery")
+                                     
+        # Приоритет
+        st.slider("Приоритет", 1, 5, st.session_state.get("k_priority", 3), key="k_priority")
 
 
-    st.markdown("---")
-
-
-    # 4.2. Раздел: Технические Реквизиты (Разбивка по вкладкам для 50+ полей)
-    tab_tech_1, tab_tech_2 = st.tabs(["2. Требования (I)", "3. Требования (II)"])
-
-
-    with tab_tech_1:
-        st.subheader("Технические Детали (Поля 1-25)")
-        
-        # 25 полей ввода
-        for i in range(1, 26):
-            # Данные сохраняются в st.session_state благодаря ключам 'k_req_i'
-            st.text_input(f"Реквизит проекта №{i}", key=f"k_req_{i}")
-
-
-    with tab_tech_2:
-        st.subheader("Дополнительные Требования (Поля 26-50)")
-        
-        # Еще 25 полей ввода
-        for i in range(26, 51):
-            st.text_input(f"Реквизит проекта №{i}", key=f"k_req_{i}")
-
-
-    # Кнопка отправки формы 1 (просто сохраняет введенные данные в памяти Streamlit)
-    st.form_submit_button("Сохранить введенные данные", type="primary")
+    # Форма должна быть закрыта здесь
+    st.form_submit_button("Сохранить данные (Обновить форму)", type="primary")
 
 
 # КОНЕЦ ФОРМЫ 1
 
 
 # =========================================================
-# 5. КАЛЬКУЛЯТОР (ВНЕ ФОРМ)
+# 5. БЛОК 2: КАЛЬКУЛЯТОР СТОИМОСТИ ЗАЯВКИ
 # =========================================================
 st.markdown("---")
-st.header("4. Калькулятор Стоимости Заявки")
+st.header("2. Калькулятор Стоимости Заявки") 
 
 
-# Кнопка для добавления новой строки в калькулятор
 add_item = st.button("➕ Добавить позицию в расчет")
 if add_item:
     st.session_state.calculator_items.append({"item": price_items[0], "qty": 1})
-    # Не используем st.rerun() здесь, чтобы избежать неконтролируемого реренда при каждом нажатии,
-    # но в данном случае это упрощает логику, оставим как было в исходном коде
     st.rerun()
 
 
 total_cost = 0
 
 
-# Отображение позиций и расчет суммы
-# Используем list(enumerate(...)) для безопасного удаления элементов во время итерации
 for i, item_data in enumerate(st.session_state.calculator_items):
     
     col_item, col_qty, col_price, col_remove = st.columns([4, 1, 1, 0.5])
 
 
     with col_item:
+        index = price_items.index(item_data["item"]) if item_data["item"] in price_items else 0
         selected_item = st.selectbox(
             f"Позиция {i}", 
             price_items, 
-            index=price_items.index(item_data["item"]) if item_data["item"] in price_items else 0,
+            index=index,
             key=f"item_{i}",
             label_visibility="collapsed"
         )
-        # Обновляем состояние сразу после выбора
         st.session_state.calculator_items[i]["item"] = selected_item
 
 
@@ -256,97 +236,188 @@ for i, item_data in enumerate(st.session_state.calculator_items):
             key=f"qty_{i}",
             label_visibility="collapsed"
         )
-        # Обновляем состояние сразу после ввода
         st.session_state.calculator_items[i]["qty"] = int(quantity)
         
     cost = 0
-    # Проверка на наличие данных в прайсе и корректный выбор
     if selected_item != price_items[0] and not price_df.empty:
         price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
         if not price_row.empty and 'ЦЕНА' in price_row.columns:
-            # Используем .astype(float) для гарантии числового типа
             try:
                 price = price_row['ЦЕНА'].iloc[0]
                 cost = float(price) * int(quantity)
                 total_cost += cost
             except ValueError:
-                 # Если ЦЕНА не число (хотя это должно быть обработано в load_price_list)
                  st.warning(f"Ошибка: Цена для '{selected_item}' не является числом.")
                  cost = 0
-
-
     
     with col_price:
         st.metric(f"Стоимость {i}", f"{cost:,.0f} ₽", label_visibility="collapsed")
         
     with col_remove:
-        st.text("") # Выравнивание
-        # Кнопка удаления должна работать
+        st.text("") 
         if st.button("🗑️", key=f"remove_{i}"):
             st.session_state.calculator_items.pop(i)
             st.rerun() 
 
 
 st.markdown("---")
-st.subheader(f"ИТОГО: {total_cost:,.0f} ₽")
+st.subheader(f"ИТОГО: {total_cost:,.0f} ₽") 
 
 
 # =========================================================
-# 6. КНОПКА ОТПРАВКИ (ФОРМА 2)
+# 6. БЛОК 3: КОММЕНТАРИЙ И КНОПКА ОТПРАВКИ
 # =========================================================
+
+
+st.header("3. Дополнительная информация")
+
+
+comment = st.text_area(
+    "Комментарий к заявке (достаточно большое поле)",
+    key="k_comment",
+    value=st.session_state.get("k_comment", ""),
+    height=200 
+)
+
+
 st.markdown("---")
 
 
-# --- ФОРМА 2: Только для записи данных в Google Sheets ---
-with st.form(key='submit_form'):
+# =========================================================
+# 7. НОВАЯ ЛОГИКА: СОГЛАСОВАНИЕ ЧЕРЕЗ WHATSAPP (ОБНОВЛЕНО!)
+# =========================================================
+
+
+def generate_whatsapp_message(total_cost):
+    """Формирует текст сообщения для WhatsApp, собирая данные из session_state."""
     
-    # Кнопка отправки формы 2
-    submitted = st.form_submit_button("✅ СОХРАНИТЬ ЗАЯВКУ В ТАБЛИЦУ", use_container_width=True)
-
-
-    if submitted:
-        
-        # 6.1. Сбор всех данных из session_state (введенные 50-60 полей)
-        
-        # Проверка обязательных полей
-        if 'k_client_name' not in st.session_state or not st.session_state.k_client_name or \
-           'k_client_phone' not in st.session_state or not st.session_state.k_client_phone:
-            st.error("Пожалуйста, заполните поля 'Название Компании' и 'Телефон' в разделе 1.")
-        else:
-            # Сбор всех данных в список для записи
-            # Проверяем, что дата создана и имеет метод strftime
-            date_to_save = st.session_state.k_date_created.strftime("%Y-%m-%d") if hasattr(st.session_state.k_date_created, 'strftime') else str(st.session_state.k_date_created)
-
-
-            all_data = [
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # 1. Дата/Время записи
-                st.session_state.k_client_name,               # 2. Название Компании
-                st.session_state.k_contact_person,            # 3. Контактное Лицо
-                st.session_state.k_client_email,              # 4. Email
-                st.session_state.k_client_phone,              # 5. Телефон
-                st.session_state.k_city,                      # 6. Город/Регион
-                date_to_save,                                 # 7. Дата Создания
-                st.session_state.k_source,                    # 8. Источник
-                st.session_state.k_status,                    # 9. Статус
-                st.session_state.k_priority,                  # 10. Приоритет
-                # 11-60. Добавляем 50 реквизитов (используем .get для безопасности)
-                *[st.session_state.get(f'k_req_{i}', '') for i in range(1, 51)],
-                # 61. Итоговая стоимость
-                total_cost 
-            ]
+    # Форматируем даты для читабельности
+    date_created_str = st.session_state.k_date_created.strftime("%Y-%m-%d")
+    date_delivery_str = st.session_state.k_date_delivery.strftime("%Y-%m-%d")
+    
+    # 1. Формируем список товаров
+    items_list = []
+    for item in st.session_state.calculator_items:
+        if item["item"] != "--- Выберите позицию ---":
+            price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == item["item"]]
+            # Безопасное извлечение цены
+            price = price_row['ЦЕНА'].iloc[0] if not price_row.empty and 'ЦЕНА' in price_row.columns else 0
             
-            # 6.2. Запись данных
-            if save_data_to_gsheets(all_data):
-                st.success("✅ Заявка успешно сохранена в Google Таблице!")
-                # Очистка состояния для новой заявки
-                
-                # Очищаем только поля, которые хотим сбросить
-                del st.session_state.k_client_name
-                del st.session_state.k_client_phone
-                st.session_state.calculator_items = []
-                
-                time.sleep(1) 
-                st.rerun() # Перезапуск формы для новой заявки
-            else:
-                # Ошибка уже выведена внутри save_data_to_gsheets
-                pass
+            cost_item = float(price) * item["qty"]
+            items_list.append(f"- {item['item']} ({item['qty']} шт.) - {cost_item:,.0f} ₽")
+    
+    items_text = "\n".join(items_list) if items_list else "Отсутствует"
+    
+    # 2. Формируем основной текст сообщения
+    message = f"""
+*ЗАЯВКА НА СОГЛАСОВАНИЕ*
+_________________________________________
+
+
+*Основные реквизиты заявки:*
+Номер заявки: {st.session_state.get('k_order_number', 'БЕЗ НОМЕРА')}
+Телефон клиента: {st.session_state.get('k_client_phone', 'Не указан')}
+Дата создания: {date_created_str}
+Дата доставки: {date_delivery_str}
+Источник: {st.session_state.get('k_source', 'Не указан')}
+Статус: {st.session_state.get('k_status', 'Новая')}
+Приоритет: {st.session_state.get('k_priority', 3)}
+
+
+*Детали заказа:*
+{items_text}
+
+
+*ИТОГО к согласованию:* {total_cost:,.0f} ₽
+_________________________________________
+
+
+*Комментарий менеджера:*
+{st.session_state.get('k_comment', 'Нет')}
+
+
+Прошу подтвердить, что указанные параметры и итоговая сумма верны.
+"""
+    return message.strip()
+
+
+# --- Кнопка для отправки сообщения ---
+col_wa, col_save = st.columns([1, 1])
+
+
+with col_wa:
+    if st.button("💬 СОГЛАСОВАТЬ заявку с клиентом (WhatsApp)", type="secondary", use_container_width=True):
+        
+        # Проверка обязательных полей для WhatsApp
+        if not st.session_state.get('k_client_phone'):
+            st.error("Пожалуйста, заполните поле 'Телефон клиента' для формирования ссылки WhatsApp.")
+        else:
+            message_text = generate_whatsapp_message(total_cost)
+            
+            # Кодируем текст для URL
+            encoded_message = urllib.parse.quote(message_text)
+            
+            # Формируем полную ссылку
+            wa_link = f"https://wa.me/{st.session_state.k_client_phone}?text={encoded_message}"
+            
+            # ❗ Отображаем ссылку, которую можно нажать
+            st.markdown(
+                f'<a href="{wa_link}" target="_blank" style="display: block; width: 100%; padding: 10px; background-color: #25D366; color: white; text-align: center; text-decoration: none; border-radius: 5px; font-weight: bold;">'
+                f'✅ НАЖМИТЕ ДЛЯ ПЕРЕХОДА В WHATSAPP (КЛИЕНТ: {st.session_state.k_client_phone})</a>', 
+                unsafe_allow_html=True
+            )
+            st.info("Сообщение сформировано. Нажмите на зеленую кнопку для отправки.")
+
+
+
+
+# --- ФОРМА 2: Кнопка только для сохранения данных ---
+with col_save:
+    # Используем Form Submit Button для сохранения данных
+    with st.form(key='submit_form'):
+        submitted_save = st.form_submit_button(
+            "💾 СОХРАНИТЬ ЗАЯВКУ В ТАБЛИЦУ", 
+            type="primary",
+            use_container_width=True
+        )
+
+
+if 'submitted_save' in locals() and submitted_save:
+        
+    # Проверка обязательных полей
+    if not st.session_state.get('k_order_number') and not st.session_state.get('k_client_phone'):
+        st.error("Пожалуйста, заполните поле 'Номер Заявки' ИЛИ 'Телефон'.")
+    else:
+        # Форматирование даты
+        date_to_save = st.session_state.k_date_created.strftime("%Y-%m-%d") if hasattr(st.session_state.k_date_created, 'strftime') else str(st.session_state.k_date_created)
+        date_delivery_to_save = st.session_state.k_date_delivery.strftime("%Y-%m-%d") if hasattr(st.session_state.k_date_delivery, 'strftime') else str(st.session_state.k_date_delivery)
+
+
+        # ❗ ОБНОВЛЕННЫЙ СПИСОК ДАННЫХ ДЛЯ GOOGLE SHEETS
+        all_data = [
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # 1. Дата/Время записи
+            st.session_state.get('k_order_number', ''),   # 2. Номер Заявки
+            st.session_state.get('k_client_phone', ''),   # 3. Телефон
+            date_to_save,                                 # 4. Дата Создания
+            date_delivery_to_save,                        # 5. НОВАЯ ДАТА ДОСТАВКИ
+            st.session_state.k_source,                    # 6. Источник
+            st.session_state.k_status,                    # 7. Статус
+            st.session_state.k_priority,                  # 8. Приоритет
+            total_cost,                                   # 9. Итоговая стоимость
+            st.session_state.get('k_comment', '')         # 10. Комментарий
+        ]
+        
+        # Запись данных
+        if save_data_to_gsheets(all_data):
+            st.success("✅ Заявка успешно сохранена в Google Таблице!")
+            
+            # Очистка состояния
+            for key in list(st.session_state.keys()):
+                if key.startswith('k_'):
+                    del st.session_state[key]
+                    
+            st.session_state.calculator_items = []
+            time.sleep(1) 
+            st.rerun() 
+        else:
+            st.error("Произошла ошибка при записи данных. Проверьте права доступа к листу 'ЗАЯВКИ'.")
