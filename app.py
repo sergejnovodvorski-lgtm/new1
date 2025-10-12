@@ -29,9 +29,7 @@ EXPECTED_HEADERS = [
 
 
 # УКАЖИТЕ СВОЙ НОМЕР МЕНЕДЖЕРА 
-MANAGER_WHATSAPP_PHONE = "79000000000" 
-
-
+MANAGER_WHATSAPP_PHONE = "79000000000" # Используется как запасной
 
 
 st.set_page_config(
@@ -54,30 +52,64 @@ def get_default_delivery_date():
 
 
 def clear_form_state():
-    """Сброс всех полей после успешной отправки."""
+    """Сброс всех полей после успешной отправки. (ИСПРАВЛЕНО: Установка пустых значений вместо удаления ключей)"""
     st.session_state.calculator_items = []
     
-    # Удаляем ключи, привязанные к input-виджетам, чтобы сбросить их
-    for key in ['k_client_phone', 'k_address', 'k_comment']:
-        if key in st.session_state:
-            del st.session_state[key]
-            
+    # Устанавливаем пустые строки вместо удаления ключей, чтобы избежать ошибки StreamlitAPIException
+    st.session_state['k_client_phone'] = "" 
+    st.session_state['k_address'] = "" 
+    st.session_state['k_comment'] = "" 
+    st.session_state['conversation_text_input'] = ""
+    st.session_state['k_order_number_input'] = ""
+    st.session_state['parsing_log'] = ""
+    
     # При сбросе формы перегенерируем номер заявки
     st.session_state['k_order_number'] = load_last_order_number()
     
     # Сброс остальных полей
-    st.session_state.conversation_text_input = ""
     st.session_state.k_delivery_date = get_default_delivery_date()
     
-    # !!! Сброс индекса строки для обновления, чтобы следующее сохранение было добавлением
+    # Сброс индекса строки для обновления, чтобы следующее сохранение было добавлением
     st.session_state.k_target_row_index = None 
+    st.session_state.app_mode = 'new' # Устанавливаем режим на "Новая заявка"
+
+
+def is_valid_phone(phone: str) -> str:
+    """Нормализует телефон к формату 7XXXXXXXXXX. Возвращает нормализованный номер или пустую строку."""
+    normalized = re.sub(r'\D', '', phone) # Удаляем все не-цифры
     
-def is_valid_phone(phone: str) -> bool:
-    """Проверяет, соответствует ли телефон формату 7XXXXXXXXXX."""
-    normalized = re.sub(r'\D', '', phone)
-    return len(normalized) == 11 and normalized.startswith('7')
+    # Если номер начинается с 8, заменяем на 7
+    if normalized.startswith('8') and len(normalized) == 11:
+        normalized = '7' + normalized[1:]
 
 
+    # Проверка, соответствует ли телефон формату 7XXXXXXXXXX
+    if len(normalized) == 11 and normalized.startswith('7'):
+        return normalized
+        
+    return "" # Возвращаем пустую строку, если невалиден
+
+
+def switch_mode():
+    """Переключает режим работы и обновляет состояние формы."""
+    new_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
+    
+    if st.session_state.app_mode != new_mode:
+        
+        # Сброс формы при переходе в режим "Новая заявка"
+        if new_mode == 'new':
+            clear_form_state() 
+        else:
+            # При переходе в режим 'edit' просто сбрасываем индекс редактирования
+            st.session_state.k_target_row_index = None 
+
+
+        st.session_state.app_mode = new_mode
+        st.session_state.parsing_log = ""
+        st.session_state.conversation_text_input = ""
+        # Обновляем поле ввода номера на текущий (либо новый, либо пустой для ввода)
+        st.session_state.k_order_number_input = st.session_state.k_order_number if new_mode == 'new' else ""
+        
 # =========================================================
 # 2. ФУНКЦИИ ПОДКЛЮЧЕНИЯ И КЭШИРОВАНИЯ
 # =========================================================
@@ -231,7 +263,6 @@ def load_order_data(order_number: str):
         row = target_row.iloc[0].to_dict()
         
         # 1. Сохранение номера строки для обновления
-        # Индекс gspread = index_df + 2 (0-based index + заголовок 1 + 1-based index)
         gspread_row_index = target_row.index[0] + 2
         st.session_state.k_target_row_index = gspread_row_index
 
@@ -307,15 +338,25 @@ if 'calculator_items' not in st.session_state:
     st.session_state.calculator_items = []
 
 
+# Ключ для хранения режима работы: 'new' или 'edit'
+if 'app_mode' not in st.session_state:
+    st.session_state.app_mode = 'new' 
+if 'mode_selector_value' not in st.session_state:
+    st.session_state.mode_selector_value = 'Новая заявка'
+
+
 # Ключ для хранения номера строки, которую нужно обновить
 if 'k_target_row_index' not in st.session_state:
-    st.session_state.k_target_row_index = None # None для новой заявки, число для существующей
+    st.session_state.k_target_row_index = None 
 
 
 if 'k_order_number' not in st.session_state:
     st.session_state.k_order_number = load_last_order_number()
 
 
+if 'k_order_number_input' not in st.session_state:
+    st.session_state.k_order_number_input = "" 
+    
 if 'k_client_phone' not in st.session_state:
     st.session_state.k_client_phone = ""
 if 'k_address' not in st.session_state:
@@ -350,49 +391,47 @@ def parse_conversation(text: str):
     
     st.session_state.parsing_log = f"--- ЛОГ ПАРСИНГА ({datetime.now().strftime('%H:%M:%S')}) ---\n"
     
-    # 1. Извлечение номера телефона
-    phone_matches = re.findall(r'(?:(?:\+7|8|7)[\s(]?)?(\d{3})[\s)]?(\d{3})[-\s]?(\d{2})[-\s]?(\d{2})', text)
+    # 1. Извлечение номера телефона (Улучшенная логика)
+    # Ищем последовательности из 7-11 цифр, затем нормализуем
+    phone_matches_raw = re.findall(r'(\d{7,11})', text) 
+    phone_counts = {}
     
-    st.session_state.parsing_log += f"Поиск телефонов (результаты): {phone_matches}\n"
+    st.session_state.parsing_log += f"Поиск телефонов (результаты): {phone_matches_raw}\n"
     
-    if phone_matches:
-        phone_counts = {}
-        for match in phone_matches:
-            normalized_phone = "7" + "".join(match)
-            if len(normalized_phone) == 11: 
-                phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
+    for raw_phone in phone_matches_raw:
+        normalized_phone = is_valid_phone(raw_phone)
         
-        if phone_counts:
-            phone = max(phone_counts.items(), key=lambda item: item[1])[0]
-            st.session_state['k_client_phone'] = phone 
-            st.info(f"✅ Телефон клиента найден: **{phone}**")
-            st.session_state.parsing_log += f"Определен основной телефон: {phone}\n"
-        else:
-             st.warning("⚠️ Телефон не найден. Пожалуйста, введите вручную.")
-             st.session_state.parsing_log += f"Телефон не определен.\n"
+        if normalized_phone:
+            phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
+    
+    if phone_counts:
+        phone = max(phone_counts.items(), key=lambda item: item[1])[0]
+        st.session_state['k_client_phone'] = phone 
+        st.info(f"✅ Телефон клиента найден: **{phone}**")
+        st.session_state.parsing_log += f"Определен основной телефон: {phone}\n"
     else:
-        st.warning("⚠️ Телефон не найден. Пожалуйста, введите вручную.")
-        st.session_state.parsing_log += f"Телефон не определен.\n"
+         st.warning("⚠️ Телефон не найден. Пожалуйста, введите вручную.")
+         st.session_state.parsing_log += f"Телефон не определен.\n"
 
 
 
 
-    # 2. Извлечение номера заявки/счета
+    # 2. Извлечение номера заявки/счета (Адаптация под режимы)
     order_match = re.search(r'(?:заявк[аи]|заказ|счет|№|номер)\s*[\W]*(\d+)', text, re.IGNORECASE)
     
     st.session_state.parsing_log += f"Поиск номера заявки (матч): {order_match.group(1) if order_match else 'None'}\n"
 
 
-    if order_match:
-        st.session_state['k_order_number'] = order_match.group(1)
-        st.info(f"✅ Номер Заявки найден и установлен: {order_match.group(1)}")
-    else:
-        # Если не найдено, оставляем автосгенерированный или загруженный номер
-        pass
-
-
-
-
+    if order_match and st.session_state.app_mode == 'edit':
+        # В режиме редактирования, если нашли номер, устанавливаем его для загрузки
+        found_order_num = order_match.group(1)
+        st.session_state['k_order_number_input'] = found_order_num
+        st.session_state['k_order_number'] = found_order_num
+        load_order_data(found_order_num)
+        st.info(f"✅ Номер Заявки найден и установлен: {found_order_num}. Данные загружены.")
+    elif order_match and st.session_state.app_mode == 'new':
+        st.info(f"💡 Обнаружен номер {order_match.group(1)}, но в режиме 'Новая заявка' он игнорируется.")
+        
     # 3. Извлечение даты доставки
     delivery_date = None
     relative_match = ""
@@ -450,7 +489,9 @@ def parse_conversation(text: str):
         st.session_state.parsing_log += f"Дата доставки не найдена, установлена по умолчанию: {tomorrow.strftime('%d.%m.%Y')}\n"
 
 
-    st.rerun() 
+    # Принудительный перезапуск только если не было загрузки данных в блоке 2
+    if not (order_match and st.session_state.app_mode == 'edit'):
+        st.rerun() 
 
 
 def save_data_to_gsheets(data_row: List[Any]) -> bool:
@@ -465,12 +506,7 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
         try:
             if row_index and isinstance(row_index, int) and row_index > 1:
                 # ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕЙ СТРОКИ
-                # Используем row_index для определения строки
                 orders_ws.update(f'A{row_index}:{gspread.utils.rowcol_to_a1(row_index, len(data_row))}', [data_row])
-                
-                # Сообщение об успехе уже выдается внутри блока spinner, чтобы избежать повторного
-                # st.success(...)
-                st.session_state.k_target_row_index = None # Сброс после обновления
                 return True
             else:
                 # ДОБАВЛЕНИЕ НОВОЙ СТРОКИ
@@ -484,7 +520,6 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
 # =========================================================
 # 6. ФУНКЦИИ КАЛЬКУЛЯТОРА И ИНТЕРФЕЙСА
 # =========================================================
-# (Остались без изменений)
 def add_item():
     """Добавляет выбранный товар в список в session_state."""
     selected_name = st.session_state['new_item_select']
@@ -524,7 +559,7 @@ def remove_item(index: int):
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
-    """Генерирует ссылку на WhatsApp с предзаполненным текстом."""
+    """Генерирует ссылку на WhatsApp с предзаполненным текстом. (ИСПРАВЛЕНО: Нормализация)"""
     
     text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа и подтвердите их:\n"
     text += f"🆔 Номер Заявки: {order_data['НОМЕР_ЗАЯВКИ']}\n"
@@ -540,10 +575,16 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     
     encoded_text = urllib.parse.quote(text)
     
-    if not target_phone.startswith('+'):
-        target_phone = '+' + target_phone
+    # !!! Нормализация номера для WhatsApp
+    normalized_phone = is_valid_phone(target_phone)
+    if not normalized_phone:
+        # Если номер невалиден, используем номер менеджера
+        target_phone_final = MANAGER_WHATSAPP_PHONE
+    else:
+        # WhatsApp требует префикс '+'
+        target_phone_final = '+' + normalized_phone 
         
-    return f"https://wa.me/{target_phone}?text={encoded_text}"
+    return f"https://wa.me/{target_phone_final}?text={encoded_text}"
 
 
 
@@ -562,32 +603,69 @@ st.title("Ввод Новой Заявки CRM 📝")
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-## Блок Редактирования/Парсинга
+## Блок Выбора Режима и Парсинга
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-with st.expander("🛠️ Загрузить для Редактирования / 🤖 Парсинг Переписки", expanded=True):
-    col_order_num, col_button = st.columns([3, 2])
+st.subheader("Выбор Режима Работы")
+
+
+# Радио-кнопка для выбора режима
+st.radio(
+    "Выберите действие:",
+    options=['Новая заявка', 'Редактировать существующую'],
+    index=0 if st.session_state.app_mode == 'new' else 1,
+    key='mode_selector_value',
+    horizontal=True,
+    on_change=switch_mode
+)
+
+
+st.session_state.app_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
+
+
+mode_text = (
+    "➕ **Режим Создания Новой Заявки**" 
+    if st.session_state.app_mode == 'new' 
+    else "🔄 **Режим Редактирования/Перезаписи**"
+)
+st.info(mode_text)
+
+
+# --- Блок Номера Заявки ---
+col_num, col_btn = st.columns([3, 1])
+
+
+with col_num:
+    # Единое поле для ввода/отображения номера
+    st.text_input(
+        "Номер Заявки / Счёта", 
+        key='k_order_number_input',
+        value=st.session_state.k_order_number if st.session_state.app_mode == 'new' else st.session_state.k_order_number_input,
+        disabled=st.session_state.app_mode == 'new', # Отключено в режиме "Новая заявка"
+        help="В режиме 'Новая' номер генерируется. В режиме 'Редактировать' введите номер и нажмите кнопку."
+    )
     
-    with col_order_num:
-        # Поле ввода номера заявки, привязанное к временному ключу
-        st.text_input(
-            "Номер Заявки / Счёта", 
-            key='k_order_number_input_temp',
-            # Используем основной ключ как начальное значение для ввода
-            value=st.session_state.k_order_number if st.session_state.k_order_number else ""
-        )
-        
-    with col_button:
-        st.markdown(" ")
-        # Кнопка для загрузки данных по номеру
-        if st.button("🔄 Получить данные по Заявке", type="secondary", use_container_width=True):
-             # Переносим значение из временного ключа в основной перед загрузкой
-             st.session_state.k_order_number = st.session_state.k_order_number_input_temp
+with col_btn:
+    st.markdown(" ") # Небольшой отступ
+    if st.session_state.app_mode == 'edit':
+        # Кнопка для загрузки данных, видна только в режиме редактирования
+        if st.button("🔄 Загрузить Заявку", type="secondary", use_container_width=True):
+             # Переносим значение из поля ввода в основной ключ для обработки
+             st.session_state.k_order_number = st.session_state.k_order_number_input
              load_order_data(st.session_state.k_order_number)
+    else:
+        # В режиме "Новая" кнопка "Очистить"
+        if st.button("🧼 Очистить Форму", type="secondary", use_container_width=True):
+            clear_form_state()
+            st.rerun()
 
 
-    st.markdown("---")
+st.markdown("---")
+
+
+# --- Блок Парсинга ---
+with st.expander("🤖 Парсинг Переписки (извлекает телефон, дату и заказ)", expanded=False):
     st.subheader("Вставьте текст переписки")
     
     conversation_text = st.text_area(
@@ -617,16 +695,13 @@ st.markdown("---")
 st.subheader("Основные Данные Заявки")
 
 
-# Индикатор режима
-mode_text = "🔄 **Режим Редактирования/Перезаписи**" if st.session_state.k_target_row_index else "➕ **Режим Создания Новой Заявки**"
-st.info(mode_text)
 
 
 col1, col2 = st.columns(2)
 
 
 with col1:
-    # Поле номера заявки, отображающее текущий номер, но отключено для прямого ввода
+    # Поле номера заявки, отображающее текущий номер
     st.text_input(
         "Номер Заявки (текущий)", 
         key='k_order_number_display',
@@ -745,12 +820,15 @@ st.markdown("---")
 st.subheader("Завершение Заявки")
 
 
+# Проверяем валидность телефона, используя нормализацию
+valid_phone = is_valid_phone(st.session_state.get('k_client_phone', ''))
+
+
 is_ready_to_send = (
     st.session_state.get('k_order_number') and 
-    st.session_state.get('k_client_phone') and 
+    valid_phone and 
     st.session_state.get('k_address') and 
-    st.session_state.calculator_items and
-    is_valid_phone(st.session_state.get('k_client_phone', '')) 
+    st.session_state.calculator_items 
 )
 
 
@@ -764,7 +842,7 @@ if not is_ready_to_send:
     missing_fields = []
     if not st.session_state.get('k_order_number'): missing_fields.append("Номер Заявки")
     if not st.session_state.get('k_client_phone'): missing_fields.append("Телефон Клиента")
-    elif not is_valid_phone(st.session_state.get('k_client_phone', '')): missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
+    elif not valid_phone: missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
     if not st.session_state.get('k_address'): missing_fields.append("Адрес Доставки")
     if not st.session_state.calculator_items: missing_fields.append("Состав Заказа")
     
@@ -785,7 +863,7 @@ if st.button(button_label, disabled=not is_ready_to_send, type=button_type, use_
     data_to_save = [
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         st.session_state.k_order_number,
-        st.session_state.k_client_phone,
+        valid_phone, # Используем нормализованный телефон
         st.session_state.k_address,
         st.session_state.k_delivery_date.strftime('%Y-%m-%d') if st.session_state.k_delivery_date else "",
         st.session_state.k_comment,
@@ -796,10 +874,14 @@ if st.button(button_label, disabled=not is_ready_to_send, type=button_type, use_
     if save_data_to_gsheets(data_to_save):
         if not st.session_state.k_target_row_index:
             st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!")
-        
+        else:
+            st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!")
+
+
+        # ОЧИСТКА: Вызываем clear_form_state() и позволяем Streamlit завершить цикл
         clear_form_state()
         time.sleep(0.5)
-        st.rerun() 
+        # !!! УДАЛЕН st.rerun() для предотвращения StreamlitAPIException
 
 
 # 2. Блок генерации ссылки WhatsApp
@@ -816,10 +898,10 @@ if is_ready_to_send:
     
     final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
     
-    whatsapp_url = generate_whatsapp_url(st.session_state.k_client_phone, whatsapp_data, final_total_sum)
+    whatsapp_url = generate_whatsapp_url(valid_phone, whatsapp_data, final_total_sum)
     
     st.markdown("---")
-    st.markdown(f"**Ссылка для подтверждения клиенту ({st.session_state.k_client_phone}):**")
+    st.markdown(f"**Ссылка для подтверждения клиенту ({valid_phone}):**")
     
     st.markdown(
         f'<a href="{whatsapp_url}" target="_blank">'
