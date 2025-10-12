@@ -42,9 +42,9 @@ if 'k_client_phone' not in st.session_state:
 if 'k_order_number' not in st.session_state:
     st.session_state.k_order_number = ""
 if 'k_address' not in st.session_state:
-    st.session_state.k_address = "" # Добавлено для корректного сброса
+    st.session_state.k_address = "" 
 if 'k_comment' not in st.session_state:
-    st.session_state.k_comment = "" # Добавлено для корректного сброса
+    st.session_state.k_comment = "" 
     
 # Дефолтное значение для даты - None (чтобы поле было пустым)
 if 'k_delivery_date' not in st.session_state:
@@ -164,8 +164,8 @@ def parse_conversation(text):
     st.session_state['k_client_phone'] = ""
     st.session_state['k_order_number'] = ""
     st.session_state['k_delivery_date'] = None
-    st.session_state['k_address'] = "" # Сброс адреса
-    st.session_state['k_comment'] = "" # Сброс комментария
+    st.session_state['k_address'] = "" 
+    st.session_state['k_comment'] = "" 
     
     # НОВОЕ: Инициализация лога
     st.session_state.parsing_log = f"--- ЛОГ ПАРСИНГА ({datetime.now().strftime('%H:%M:%S')}) ---\n"
@@ -357,7 +357,10 @@ def generate_whatsapp_url(target_phone, order_data, total_sum):
     # Кодирование текста для URL
     encoded_text = urllib.parse.quote(text)
     
-    # ИСПРАВЛЕНИЕ: Добавлен return для завершения функции
+    # ❗ ИСПРАВЛЕНИЕ КРИТИЧЕСКОЙ ОШИБКИ: Добавляем '+' в начало номера для wa.me
+    if not target_phone.startswith('+'):
+        target_phone = '+' + target_phone
+        
     return f"https://wa.me/{target_phone}?text={encoded_text}"
 
 
@@ -500,12 +503,7 @@ if st.session_state.calculator_items:
     # Рассчитываем общую сумму
     total_sum = df_items['СУММА'].sum()
     
-    # Создаем интерактивную таблицу с кнопками удаления
-    # Примечание: st.data_editor требует передачи аргумента 'key' для кнопки
-    
-    # Подготавливаем DataFrame для data_editor с динамическими кнопками
-    data_for_editor = st.session_state.calculator_items
-    
+    # Отображение данных заказа
     st.dataframe(
         df_items[['НАИМЕНОВАНИЕ', 'КОЛИЧЕСТВО', 'ЦЕНА_ЗА_ЕД', 'СУММА']],
         column_config={
@@ -518,9 +516,7 @@ if st.session_state.calculator_items:
         use_container_width=True
     )
     
-    # В Streamlit 1.29+ нет простого способа добавить кнопки удаления в каждую строку st.data_editor 
-    # без сложной логики. Проще вывести список и добавить кнопки рядом.
-    
+    # Добавление кнопок удаления
     for i, item in enumerate(st.session_state.calculator_items):
          col_name, col_sum, col_del = st.columns([4, 1.5, 0.5])
          with col_name:
