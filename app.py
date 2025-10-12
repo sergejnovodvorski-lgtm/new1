@@ -256,10 +256,7 @@ def parse_conversation(text):
         st.session_state.parsing_log += f"Дата доставки не найдена, установлена по умолчанию: {tomorrow.strftime('%d.%m.%Y')}\n"
 
 
-    # ⚠️ КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: УДАЛЕНА строка st.session_state.conversation_text_input = ""
     # Сброс поля теперь выполняется в основном блоке, чтобы избежать ошибки API.
-
-
 
 
     # Перезапуск для немедленного обновления полей
@@ -276,3 +273,384 @@ def save_data_to_gsheets(data_row):
     try:
         orders_ws.append_row(data_row)
         return True
+    except Exception as e:
+        st.error(f"Ошибка записи в Google Sheets: {e}")
+        return False # <-- Убедитесь, что этот return False имеет отступ, равный except
+
+
+
+
+# =========================================================
+# 4. ФУНКЦИИ КАЛЬКУЛЯТОРА И ИНТЕРФЕЙСА
+# =========================================================
+
+
+
+
+def add_item():
+    """Добавляет выбранный товар в список в session_state."""
+    selected_name = st.session_state['new_item_select']
+    quantity = st.session_state['new_item_qty']
+    
+    if selected_name != "--- Выберите позицию ---" and quantity > 0:
+        price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_name]
+        
+        if price_row.empty:
+             st.error(f"Ошибка: позиция '{selected_name}' не найдена в прайс-листе.")
+             return
+
+
+        price = price_row.iloc[0]['ЦЕНА']
+        
+        st.session_state.calculator_items.append({
+            'НАИМЕНОВАНИЕ': selected_name,
+            'КОЛИЧЕСТВО': quantity,
+            'ЦЕНА_ЗА_ЕД': price,
+            'СУММА': price * quantity
+        })
+
+
+        # Сброс счетчика количества после добавления
+        st.session_state['new_item_qty'] = 1
+        
+        # Сброс выбранной позиции на дефолтное значение
+        st.session_state['new_item_select'] = price_items[0] 
+
+
+
+
+def remove_item(index):
+    """Удаляет позицию из списка по индексу. Требует st.rerun() для обновления UI."""
+    if 0 <= index < len(st.session_state.calculator_items):
+        st.session_state.calculator_items.pop(index)
+    st.rerun()
+
+
+
+
+def generate_whatsapp_url(target_phone, order_data, total_sum):
+    """Генерирует ссылку на WhatsApp с предзаполненным текстом."""
+    
+    text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа и подтвердите их:\n"
+    text += f"🆔 Номер Заявки: {order_data['НОМЕР_ЗАЯВКИ']}\n"
+    text += f"📞 Телефон: {order_data['ТЕЛЕФОН']}\n"
+    text += f"📍 Адрес: {order_data['АДРЕС']}\n"
+    text += f"🗓️ Дата Доставки: {order_data['ДАТА_ДОСТАВКИ']}\n"
+    
+    # Условное добавление комментария
+    if order_data.get('КОММЕНТАРИЙ'):
+        text += f"📝 Комментарий: {order_data['КОММЕНТАРИЙ']}\n"
+        
+    text += f"\n🛒 Состав Заказа:\n{order_data['ЗАКАЗ']}\n"
+    text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n"
+    
+    # Кодирование текста для URL
+    encoded_text = urllib.parse.quote(text)
+    return f"https://wa.me/7{target_phone}?text={encoded_text}"
+
+
+
+
+def display_whatsapp_notification(total_sum, order_items_text, form_data):
+    """Генерирует и отображает кнопку WhatsApp, не сохраняя данные в GS."""
+    
+    client_phone_for_wa = form_data['client_phone']
+    
+    if not client_phone_for_wa:
+        st.error("Нельзя отправить уведомление: не указан Телефон клиента.")
+        return
+
+
+    # Убедимся, что телефон начинается с '7' и содержит только цифры
+    clean_phone = re.sub(r'[^\d]', '', client_phone_for_wa)
+    if not clean_phone.startswith('7'):
+        clean_phone = '7' + clean_phone
+        
+    whatsapp_data = {
+        'ДАТА_ВВОДА': datetime.now().strftime("%d.%m.%Y %H:%M"),
+        'НОМЕР_ЗАЯВКИ': form_data['order_number'],
+        'ТЕЛЕФОН': client_phone_for_wa,
+        'АДРЕС': form_data['client_address'],
+        'ДАТА_ДОСТАВКИ': form_data['delivery_date'].strftime("%d.%m.%Y"),
+        'ЗАКАЗ': order_items_text,
+        'КОММЕНТАРИЙ': form_data['client_comment']
+    }
+    
+    # Используем чистый номер телефона для ссылки
+    whatsapp_link = generate_whatsapp_url(clean_phone, whatsapp_data, total_sum)
+    
+    st.success("Сообщение для согласования готово!")
+    st.markdown(f"**Нажмите, чтобы отправить заказ клиенту ({client_phone_for_wa}):**")
+    st.link_button("📲 ОТПРАВИТЬ В WHATSAPP", whatsapp_link, type="primary")
+
+
+
+
+def save_order_to_gsheets(total_sum, order_items_text, form_data):
+    """Сохраняет данные в Google Sheets и очищает состояние, не отправляя уведомление."""
+    
+    # Формируем строку для Google Sheets (согласно колонкам листа ЗАЯВКИ)
+    data_row = [
+        datetime.now().strftime("%d.%m.%Y %H:%M"), # ДАТА_ВВОДА 
+        form_data['order_number'],                   # НОМЕР_ЗАЯВКИ
+        "",                                          # КЛИЕНТ (пусто)
+        form_data['client_phone'],                   # ТЕЛЕФОН
+        form_data['client_address'],                 # АДРЕС
+        form_data['delivery_date'].strftime("%d.%m.%Y"), # ДАТА_ДОСТАВКИ
+        order_items_text,                            # ЗАКАЗ (список товаров)
+        float(total_sum),                            # ИТОГО (Приведение к float)
+        "Новая"                                      # СТАТУС
+    ]
+    
+    if save_data_to_gsheets(data_row):
+        st.success("🎉 Заявка успешно сохранена в Google Sheets и отправлена в CRM!")
+        
+        # Очистка формы и состояния
+        st.session_state.calculator_items = []
+        st.session_state.k_client_phone = ""
+        st.session_state.k_order_number = ""
+        st.session_state.k_delivery_date = None # Сброс на None
+        st.session_state['new_item_qty'] = 1
+        st.session_state['new_item_select'] = price_items[0]
+        st.session_state.parsing_log = "" # Очистка лога
+        st.session_state.conversation_text_input = "" # Очистка текста переписки
+        time.sleep(1)
+        st.rerun() 
+
+
+
+
+# =========================================================
+# 5. ОСНОВНОЕ ТЕЛО ПРИЛОЖЕНИЯ
+# =========================================================
+
+
+
+
+# Проверка критических ошибок
+if st.session_state.critical_error:
+    st.error("🚨 КРИТИЧЕСКАЯ ОШИБКА ИНИЦИАЛИЗАЦИИ")
+    st.markdown(f"**Приложение не может работать из-за следующей проблемы:**")
+    st.code(st.session_state.critical_error, language='markdown')
+
+
+
+
+else:
+    st.title("CRM: Ввод Новой Заявки")
+    
+    # ----------------------------------------------------
+    # 1. СЕКЦИЯ ПАРСИНГА
+    # ----------------------------------------------------
+    st.header("1. Автозаполнение по переписке")
+    
+    st.text_area(
+        "Вставьте текст переписки/заказа для автоматического извлечения данных:", 
+        height=150,
+        placeholder="Пример: 'Мне нужен заказ №123, привезите завтра на адрес Москва, ул. Ленина, 55. Мой номер 79011234567'",
+        key="conversation_text_input" 
+    )
+    
+    # ⚠️ ИСПРАВЛЕННАЯ ЛОГИКА СБРОСА:
+    if st.button("🔍 ПАРСИТЬ ТЕКСТ", type="secondary"):
+        text_to_parse = st.session_state.conversation_text_input
+        
+        # 1. Сброс поля ДО вызова parse_conversation
+        st.session_state.conversation_text_input = "" 
+        
+        # 2. Вызываем парсинг с сохраненным текстом
+        if text_to_parse:
+            parse_conversation(text_to_parse)
+        else:
+            st.warning("Пожалуйста, вставьте текст для парсинга.")
+    
+    # Временный блок для вывода технической информации
+    if st.session_state.parsing_log:
+        with st.expander("🛠️ Технический лог парсинга", expanded=False):
+            st.code(st.session_state.parsing_log, language='markdown') 
+            
+    st.divider()
+
+
+
+
+    # ----------------------------------------------------
+    # 2. ДАННЫЕ КЛИЕНТА
+    # ----------------------------------------------------
+    
+    st.header("2. Данные Клиента и Доставки")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Контакты")
+        client_phone = st.text_input(
+            "Телефон", 
+            value=st.session_state.k_client_phone, 
+            key='client_phone_input'
+        )
+        st.session_state.k_client_phone = client_phone
+        
+        client_address = st.text_area("Адрес Доставки", key='client_address_input', height=80)
+        
+    with col2:
+        st.subheader("Заявка и Дата")
+        order_number = st.text_input(
+            "Номер Заявки (внутренний)", 
+            value=st.session_state.k_order_number,
+            key='order_number_input'
+        )
+        # Если k_delivery_date равно None, поле даты будет пустым
+        delivery_date = st.date_input(
+            "Дата Доставки", 
+            value=st.session_state.k_delivery_date, 
+            key='delivery_date_input',
+            min_value=datetime.today().date()
+        )
+    
+    client_comment = st.text_area(
+        "Дополнительный комментарий (будет включен в WhatsApp)", 
+        key='client_comment_input', 
+        height=50
+    )
+
+
+
+
+    st.divider()
+
+
+
+
+    # ----------------------------------------------------
+    # 3. КАЛЬКУЛЯТОР
+    # ----------------------------------------------------
+    
+    st.header("3. Добавление позиций в Заказ")
+    
+    # Расчеты перед формой отправки
+    total_sum = sum(item['СУММА'] for item in st.session_state.calculator_items)
+    order_items_list = [f"{i['НАИМЕНОВАНИЕ']} x {i['КОЛИЧЕСТВО']} ({i['СУММА']:,.2f} руб.)" for i in st.session_state.calculator_items]
+    order_items_text = "\n".join(order_items_list)
+    
+    # Блок добавления товара
+    col_select, col_qty, col_add = st.columns([5, 2, 1])
+    
+    with col_select:
+        st.selectbox(
+            "Выберите позицию из прайса", 
+            options=price_items, 
+            key='new_item_select'
+        )
+    with col_qty:
+        st.number_input(
+            "Количество", 
+            min_value=1, 
+            value=st.session_state['new_item_qty'], 
+            step=1, 
+            key='new_item_qty'
+        )
+    with col_add:
+        st.markdown(" ") 
+        st.button("➕ ДОБАВИТЬ", on_click=add_item, type="secondary")
+
+
+
+
+    # Таблица заказа
+    if st.session_state.calculator_items:
+        st.markdown("---")
+        st.subheader("Текущий состав:")
+        
+        items_df = pd.DataFrame(st.session_state.calculator_items)
+        items_df['КОЛ-ВО'] = items_df['КОЛИЧЕСТВО'].astype(int) 
+        
+        # Создаем колонки: 1 для таблицы, 1 для кнопок "X"
+        col_table, col_del_buttons = st.columns([10, 1])
+        
+        with col_table:
+            st.dataframe(
+                items_df[['НАИМЕНОВАНИЕ', 'КОЛ-ВО', 'ЦЕНА_ЗА_ЕД', 'СУММА']],
+                hide_index=True,
+                column_config={
+                    "ЦЕНА_ЗА_ЕД": st.column_config.NumberColumn("ЦЕНА/ЕД", format="%.2f"),
+                    "СУММА": st.column_config.NumberColumn("СУММА", format="%.2f", width="small"),
+                    "КОЛ-ВО": st.column_config.NumberColumn("КОЛ-ВО", format="%d", width="tiny"),
+                    "НАИМЕНОВАНИЕ": st.column_config.TextColumn("НАИМЕНОВАНИЕ", width="large")
+                },
+                use_container_width=True
+            )
+
+
+
+
+        # Отображение кнопок удаления
+        with col_del_buttons:
+            # Небольшая заглушка для выравнивания первой кнопки с заголовком таблицы
+            st.markdown('<div style="height: 34px;"></div>', unsafe_allow_html=True) 
+            for i in range(len(st.session_state.calculator_items)):
+                st.button("❌", key=f'del_item_{i}', on_click=remove_item, args=(i,), help="Удалить позицию", use_container_width=True)
+                
+    else:
+        st.info("Список заказа пуст. Используйте раздел выше для добавления товаров.")
+
+
+
+
+    st.markdown("---")
+    st.markdown(f"#### 💰 ИТОГО ПО ЗАКАЗУ: {total_sum:,.2f} РУБ.")
+    
+    # ----------------------------------------------------
+    # 4. ФОРМА ОТПРАВКИ (ДЕЙСТВИЯ)
+    # ----------------------------------------------------
+    
+    # Формируем данные для проверки
+    form_data = {
+        'order_number': order_number,
+        'client_phone': client_phone,
+        'client_address': client_address,
+        'delivery_date': delivery_date,
+        'client_comment': client_comment
+    }
+    
+    with st.form("action_form", clear_on_submit=False):
+        
+        # Условие блокировки: Телефон, Адрес, Дата и Сумма > 0
+        is_disabled = (total_sum == 0 or not client_phone or not client_address or delivery_date is None)
+
+
+        col_send, col_save = st.columns(2)
+        
+        with col_send:
+            send_button = st.form_submit_button(
+                "1. ОТПРАВИТЬ УВЕДОМЛЕНИЕ В WHATSAPP", 
+                type="primary",
+                disabled=is_disabled
+            )
+
+
+
+
+        with col_save:
+            save_button = st.form_submit_button(
+                "2. СОХРАНИТЬ ЗАЯВКУ В CRM", 
+                type="secondary",
+                disabled=is_disabled
+            )
+
+
+
+
+        if send_button or save_button:
+            
+            # Валидация данных 
+            if total_sum == 0:
+                st.warning("Нельзя отправить пустой заказ.")
+            elif not client_phone or not client_address or delivery_date is None:
+                st.warning("Пожалуйста, заполните все обязательные поля (Телефон, Адрес, Дата Доставки).")
+            else:
+                if send_button:
+                    display_whatsapp_notification(total_sum, order_items_text, form_data)
+                
+                if save_button:
+                    save_order_to_gsheets(total_sum, order_items_text, form_data)
