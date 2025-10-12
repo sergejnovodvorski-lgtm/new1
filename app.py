@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 import urllib.parse
 import time
 from typing import List, Dict, Any
-# Импортируем 'math' для проверки на NaN, которые могут возникнуть при преобразовании
 import math 
 
 
@@ -120,7 +119,6 @@ def initialize_worksheet_headers(worksheet: gspread.Worksheet):
         current_headers = worksheet.row_values(1)
         
         if current_headers == EXPECTED_HEADERS:
-            # st.info("✅ Структура листа 'ЗАЯВКИ' уже корректна.") # Комментарий для чистоты лога
             return
 
 
@@ -158,7 +156,7 @@ def load_price_list():
             )
             return pd.DataFrame()
         
-        # Преобразование цены в числовой формат. 'errors=coerce' заменит нечисловые на NaN
+        # Преобразование цены в числовой формат
         df['ЦЕНА'] = pd.to_numeric(df['ЦЕНА'], errors='coerce') 
         # Удаляем строки с невалидной ценой
         df.dropna(subset=['ЦЕНА'], inplace=True)
@@ -218,7 +216,6 @@ def parse_conversation(text: str):
     
     # 1. Извлечение номера телефона (Поиск по частоте)
     # Ищем 10-значные комбинации цифр (без учета скобок/пробелов)
-    # Паттерн: (7 или 8) (опционально) + 10 цифр
     phone_matches = re.findall(r'(?:(?:\+7|8|7)[\s(]?)?(\d{3})[\s)]?(\d{3})[-\s]?(\d{2})[-\s]?(\d{2})', text)
     
     st.session_state.parsing_log += f"Поиск телефонов (результаты): {phone_matches}\n"
@@ -228,7 +225,7 @@ def parse_conversation(text: str):
         for match in phone_matches:
             # Нормализация в формат 7ХХХХХХХХХХ
             normalized_phone = "7" + "".join(match)
-            if len(normalized_phone) == 11: # Проверяем, что получилось 11 цифр
+            if len(normalized_phone) == 11: 
                 phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
         
         if phone_counts:
@@ -309,7 +306,6 @@ def parse_conversation(text: str):
         initial_date_str = delivery_date.strftime('%d.%m.%Y')
         year_corrected = False
         
-        # Корректируем год, пока дата в прошлом, но не перепрыгиваем больше, чем на год вперед
         while delivery_date < today and delivery_date.year < today.year + 1:
             delivery_date = delivery_date.replace(year=delivery_date.year + 1)
             year_corrected = True
@@ -339,13 +335,10 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
         st.error("Не удалось подключиться к листу для записи данных.")
         return False
     try:
-        # gspread ожидает список, содержащий только базовые типы Python (str, int, float, bool)
-        # Если в data_row есть объекты NumPy (int64, float64), JSON-сериализация упадет.
-        # Поэтому мы гарантируем, что все числовые значения конвертированы до вызова.
+        # data_row должен содержать только стандартные типы Python (str, int, float)
         orders_ws.append_row(data_row)
         return True
     except Exception as e:
-        # При возникновении ошибки записи (в т.ч. из-за типов)
         st.error(f"Ошибка записи в Google Sheets: {e}")
         return False
 
@@ -358,8 +351,12 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
 def add_item():
     """Добавляет выбранный товар в список в session_state."""
     selected_name = st.session_state['new_item_select']
-    # Преобразуем количество к базовому int, чтобы избежать int64
-    quantity = int(st.session_state['new_item_qty']) 
+    # *** ИСПРАВЛЕНИЕ: Преобразование к базовому int для избежания int64 ***
+    try:
+        quantity = int(st.session_state['new_item_qty']) 
+    except ValueError:
+        st.error("Ошибка: Количество должно быть целым числом.")
+        return
     
     if selected_name != "--- Выберите позицию ---" and quantity > 0:
         price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_name]
@@ -369,7 +366,7 @@ def add_item():
              return
 
 
-        # Извлекаем цену и преобразуем ее к базовому float, чтобы избежать float64
+        # *** ИСПРАВЛЕНИЕ: Извлечение и преобразование цены к базовому float для избежания float64 ***
         price = float(price_row.iloc[0]['ЦЕНА'])
         
         st.session_state.calculator_items.append({
@@ -389,7 +386,7 @@ def remove_item(index: int):
     """Удаляет позицию из списка по индексу."""
     if 0 <= index < len(st.session_state.calculator_items):
         st.session_state.calculator_items.pop(index)
-    # st.rerun() # убрано, т.к. Streamlit сам перерисует после on_click
+    st.rerun()
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
@@ -413,7 +410,6 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     
     # Нормализация телефона для wa.me (должен начинаться с +)
     if not target_phone.startswith('+'):
-        # Предполагаем, что телефон уже в формате 7ХХХХХХХХХХ
         target_phone = '+' + target_phone
         
     return f"https://wa.me/{target_phone}?text={encoded_text}"
@@ -491,13 +487,13 @@ with col2:
     # Устанавливаем дату либо из session_state, либо завтрашнюю
     default_date = st.session_state.k_delivery_date if st.session_state.k_delivery_date else datetime.today().date() + timedelta(days=1)
     
-    # Обработка случая, когда default_date - None (хотя по логике он должен быть установлен)
-    date_value = default_date if isinstance(default_date, datetime) or isinstance(default_date, datetime.date) else datetime.today().date() + timedelta(days=1)
+    # *** ИСПРАВЛЕНИЕ: Удаление проблемной строки проверки типа date_value ***
+    # Оставляем только гарантированное значение default_date для st.date_input
     
     st.date_input(
         "Дата Доставки",
         key='k_delivery_date',
-        value=date_value,
+        value=default_date, # Используем уже гарантированное значение datetime.date
         min_value=datetime.today().date()
     )
     
@@ -541,7 +537,6 @@ with col_qty:
 
 with col_add:
     st.markdown(" ")
-    # Проверка, что выбрана позиция, прежде чем включать кнопку
     disable_add = price_df.empty or st.session_state.get('new_item_select') == price_items[0]
     st.button("➕ Добавить", on_click=add_item, use_container_width=True, disabled=disable_add)
 
@@ -552,7 +547,7 @@ if st.session_state.calculator_items:
     
     df_items = pd.DataFrame(st.session_state.calculator_items)
     
-    # total_sum уже будет стандартным float, так как мы его рассчитали с float в add_item
+    # total_sum будет стандартным float, так как мы его рассчитали с float в add_item
     total_sum = df_items['СУММА'].sum() 
     
     # Display table of items
@@ -570,12 +565,11 @@ if st.session_state.calculator_items:
     
     # Display delete buttons
     st.markdown("##### Удаление позиций:")
-    # Отображаем в обратном порядке для удобства
     for i in range(len(st.session_state.calculator_items) - 1, -1, -1):
          item = st.session_state.calculator_items[i]
          col_name, col_sum, col_del = st.columns([5, 1.5, 0.5])
          with col_name:
-             st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕСТВО']} шт.)")
+             st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕЕСТВО']} шт.)")
          with col_sum:
              st.write(f"**{item['СУММА']:,.2f} РУБ.**")
          with col_del:
@@ -605,7 +599,7 @@ is_ready_to_send = (
     st.session_state.k_client_phone and 
     st.session_state.k_address and 
     st.session_state.calculator_items and
-    is_valid_phone(st.session_state.k_client_phone) # Добавлена проверка формата телефона
+    is_valid_phone(st.session_state.k_client_phone) 
 )
 
 
@@ -633,6 +627,9 @@ if not is_ready_to_send:
 # 1. Кнопка "Сохранить в CRM"
 if st.button("💾 Сохранить Заявку в Google Sheets", disabled=not is_ready_to_send, type="primary", use_container_width=True):
     
+    # *** КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Явное преобразование total_sum в float перед записью.
+    final_total_sum = float(total_sum) if not math.isnan(total_sum) else ""
+    
     # Подготовка строки данных для Google Sheets
     data_to_save = [
         datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -642,9 +639,7 @@ if st.button("💾 Сохранить Заявку в Google Sheets", disabled=n
         st.session_state.k_delivery_date.strftime('%Y-%m-%d') if st.session_state.k_delivery_date else "",
         st.session_state.k_comment,
         order_details,
-        # *** КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Явное преобразование в float, 
-        # *** чтобы избежать ошибки 'int64 is not json serializable' от NumPy/Pandas.
-        float(total_sum) if not math.isnan(total_sum) else ""
+        final_total_sum # Теперь это базовый Python float или пустая строка
     ]
     
     if save_data_to_gsheets(data_to_save):
@@ -670,7 +665,6 @@ if is_ready_to_send:
         'ЗАКАЗ': order_details
     }
     
-    # total_sum уже должен быть float, но на всякий случай преобразуем его еще раз
     final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
     
     whatsapp_url = generate_whatsapp_url(st.session_state.k_client_phone, whatsapp_data, final_total_sum)
