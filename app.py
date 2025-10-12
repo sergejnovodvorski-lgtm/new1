@@ -69,6 +69,9 @@ def clear_form_state():
     st.session_state.conversation_text_input = ""
     st.session_state.k_delivery_date = get_default_delivery_date()
     
+    # !!! Сброс индекса строки для обновления, чтобы следующее сохранение было добавлением
+    st.session_state.k_target_row_index = None 
+    
 def is_valid_phone(phone: str) -> bool:
     """Проверяет, соответствует ли телефон формату 7XXXXXXXXXX."""
     normalized = re.sub(r'\D', '', phone)
@@ -143,8 +146,6 @@ def load_last_order_number() -> str:
         return str(next_number)
         
     except Exception as e:
-        # Убрана ошибка, так как она уже может быть записана через set_critical_error в get_orders_worksheet
-        # st.error(f"Не удалось получить последний номер заявки. Используется дефолтный 1001. Ошибка: {e}")
         return "1001"
         
 @st.cache_data(ttl="1h")
@@ -206,7 +207,8 @@ def get_orders_worksheet():
 
 def load_order_data(order_number: str):
     """
-    Загружает данные заявки по номеру из Google Sheets и обновляет st.session_state.
+    Загружает данные заявки по номеру из Google Sheets и обновляет st.session_state,
+    сохраняя индекс строки для последующего обновления.
     """
     orders_ws = get_orders_worksheet()
     if not orders_ws:
@@ -215,44 +217,46 @@ def load_order_data(order_number: str):
 
 
     try:
-        # Получаем все записи в виде списка словарей
         data = orders_ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # Фильтруем по номеру заявки
-        # Ищем строгое совпадение, преобразуя все в строку
         target_row = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
         
         if target_row.empty:
             st.warning(f"⚠️ Заявка с номером **{order_number}** не найдена.")
+            st.session_state.k_target_row_index = None # Убедимся, что это новая заявка
             return
 
 
-        # Найдена строка (берем первую, если есть дубликаты)
         row = target_row.iloc[0].to_dict()
         
-        # 1. Обновляем основные поля формы
+        # 1. Сохранение номера строки для обновления
+        # Индекс gspread = index_df + 2 (0-based index + заголовок 1 + 1-based index)
+        gspread_row_index = target_row.index[0] + 2
+        st.session_state.k_target_row_index = gspread_row_index
+
+
+        # 2. Обновляем основные поля формы
         st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
         st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
         st.session_state.k_address = str(row.get('АДРЕС', ''))
         st.session_state.k_comment = str(row.get('КОММЕНТАРИЙ', ''))
         
-        # 2. Обновляем дату доставки
+        # 3. Обновляем дату доставки
         delivery_date_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
         try:
-            # Даты в Google Sheets обычно хранятся в формате YYYY-MM-DD
             date_obj = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
             st.session_state.k_delivery_date = date_obj
         except (ValueError, TypeError):
             st.session_state.k_delivery_date = get_default_delivery_date()
 
 
-        # 3. Парсим состав заказа (ЗАКАЗ) и обновляем калькулятор
+        # 4. Парсим состав заказа
         order_text = str(row.get('ЗАКАЗ', ''))
         st.session_state.calculator_items = parse_order_text_to_items(order_text)
         
-        st.success(f"✅ Данные заявки №**{order_number}** успешно загружены для корректировки.")
-        st.warning("Внимание: при сохранении, эта заявка будет добавлена как новая. Удалите старую вручную!")
+        st.success(f"✅ Данные заявки №**{order_number}** успешно загружены для корректировки. (Строка {gspread_row_index})")
+        st.warning("Внимание: При сохранении **существующая заявка будет перезаписана**!")
 
 
     except Exception as e:
@@ -264,7 +268,6 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
     items = []
     
     # Регулярное выражение для поиска строк: НАИМЕНОВАНИЕ - КОЛИЧЕСТВО шт. (по ЦЕНА РУБ.)
-    # Группы: (1: НАИМЕНОВАНИЕ), (2: КОЛИЧЕСТВО), (3: ЦЕНА)
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
     
     for line in order_text.split('\n'):
@@ -272,12 +275,11 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
         if match:
             name = match.group(1).strip()
             qty = int(match.group(2))
-            # Удаляем пробелы и заменяем запятую на точку для преобразования в float
             price_str = match.group(3).replace(' ', '').replace(',', '.')
             try:
                 price_per_unit = float(price_str)
             except ValueError:
-                price_per_unit = 0.0 # Если цена не парсится, ставим 0
+                price_per_unit = 0.0
             
             items.append({
                 'НАИМЕНОВАНИЕ': name,
@@ -303,6 +305,11 @@ if 'critical_error' not in st.session_state:
     st.session_state.critical_error = None
 if 'calculator_items' not in st.session_state:
     st.session_state.calculator_items = []
+
+
+# Ключ для хранения номера строки, которую нужно обновить
+if 'k_target_row_index' not in st.session_state:
+    st.session_state.k_target_row_index = None # None для новой заявки, число для существующей
 
 
 if 'k_order_number' not in st.session_state:
@@ -343,8 +350,6 @@ def parse_conversation(text: str):
     
     st.session_state.parsing_log = f"--- ЛОГ ПАРСИНГА ({datetime.now().strftime('%H:%M:%S')}) ---\n"
     
-    # ... [Логика парсинга телефона и даты остается прежней] ...
-    
     # 1. Извлечение номера телефона
     phone_matches = re.findall(r'(?:(?:\+7|8|7)[\s(]?)?(\d{3})[\s)]?(\d{3})[-\s]?(\d{2})[-\s]?(\d{2})', text)
     
@@ -379,12 +384,10 @@ def parse_conversation(text: str):
 
 
     if order_match:
-        # ПЕРЕЗАПИСЫВАЕМ ТОЛЬКО ЕСЛИ КЛЮЧ НЕ БЫЛ ЗАГРУЖЕН ВРУЧНУЮ ДЛЯ РЕДАКТИРОВАНИЯ
-        # В данном случае, просто перезаписываем, позволяя пользователю потом перебить
         st.session_state['k_order_number'] = order_match.group(1)
         st.info(f"✅ Номер Заявки найден и установлен: {order_match.group(1)}")
     else:
-        # Если не найдено, оставляем автосгенерированный номер
+        # Если не найдено, оставляем автосгенерированный или загруженный номер
         pass
 
 
@@ -451,25 +454,37 @@ def parse_conversation(text: str):
 
 
 def save_data_to_gsheets(data_row: List[Any]) -> bool:
-    """Добавляет строку данных на лист ЗАЯВКИ."""
+    """Обновляет существующую строку или добавляет новую в лист ЗАЯВКИ."""
     if orders_ws is None:
         st.error("Не удалось подключиться к листу для записи данных.")
         return False
     
-    with st.spinner("⏳ Сохранение заявки в Google Sheets..."):
+    row_index = st.session_state.k_target_row_index
+    
+    with st.spinner(f"⏳ {'Обновление' if row_index else 'Сохранение'} заявки в Google Sheets..."):
         try:
-            orders_ws.append_row(data_row)
-            return True
+            if row_index and isinstance(row_index, int) and row_index > 1:
+                # ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕЙ СТРОКИ
+                # Используем row_index для определения строки
+                orders_ws.update(f'A{row_index}:{gspread.utils.rowcol_to_a1(row_index, len(data_row))}', [data_row])
+                
+                # Сообщение об успехе уже выдается внутри блока spinner, чтобы избежать повторного
+                # st.success(...)
+                st.session_state.k_target_row_index = None # Сброс после обновления
+                return True
+            else:
+                # ДОБАВЛЕНИЕ НОВОЙ СТРОКИ
+                orders_ws.append_row(data_row)
+                return True
         except Exception as e:
-            st.error(f"Ошибка записи в Google Sheets: {e}")
+            st.error(f"Ошибка {'обновления' if row_index else 'записи'} в Google Sheets: {e}")
             return False
 
 
 # =========================================================
 # 6. ФУНКЦИИ КАЛЬКУЛЯТОРА И ИНТЕРФЕЙСА
 # =========================================================
-
-
+# (Остались без изменений)
 def add_item():
     """Добавляет выбранный товар в список в session_state."""
     selected_name = st.session_state['new_item_select']
@@ -555,15 +570,16 @@ with st.expander("🛠️ Загрузить для Редактирования
     col_order_num, col_button = st.columns([3, 2])
     
     with col_order_num:
-         # Поле ввода номера заявки, привязанное к session_state
+        # Поле ввода номера заявки, привязанное к временному ключу
         st.text_input(
             "Номер Заявки / Счёта", 
-            key='k_order_number_input_temp', # Используем временный ключ для ввода
+            key='k_order_number_input_temp',
+            # Используем основной ключ как начальное значение для ввода
             value=st.session_state.k_order_number if st.session_state.k_order_number else ""
         )
         
     with col_button:
-        st.markdown(" ") # Отступ
+        st.markdown(" ")
         # Кнопка для загрузки данных по номеру
         if st.button("🔄 Получить данные по Заявке", type="secondary", use_container_width=True):
              # Переносим значение из временного ключа в основной перед загрузкой
@@ -601,15 +617,21 @@ st.markdown("---")
 st.subheader("Основные Данные Заявки")
 
 
+# Индикатор режима
+mode_text = "🔄 **Режим Редактирования/Перезаписи**" if st.session_state.k_target_row_index else "➕ **Режим Создания Новой Заявки**"
+st.info(mode_text)
+
+
 col1, col2 = st.columns(2)
 
 
 with col1:
-    # Поле ввода номера заявки, привязанное к основному ключу
+    # Поле номера заявки, отображающее текущий номер, но отключено для прямого ввода
     st.text_input(
-        "Номер Заявки (редактируемый)", 
-        key='k_order_number',
-        disabled=True # Делаем поле недоступным для прямого редактирования, только через кнопку/парсер
+        "Номер Заявки (текущий)", 
+        key='k_order_number_display',
+        value=st.session_state.k_order_number,
+        disabled=True 
     )
     
     st.text_input(
@@ -752,7 +774,11 @@ if not is_ready_to_send:
 
 
 # 1. Кнопка "Сохранить в CRM"
-if st.button("💾 Сохранить Заявку в Google Sheets", disabled=not is_ready_to_send, type="primary", use_container_width=True):
+button_label = "💾 Перезаписать Заявку" if st.session_state.k_target_row_index else "💾 Сохранить Новую Заявку"
+button_type = "danger" if st.session_state.k_target_row_index else "primary"
+
+
+if st.button(button_label, disabled=not is_ready_to_send, type=button_type, use_container_width=True):
     
     final_total_sum = float(total_sum) if not math.isnan(total_sum) else ""
     
@@ -768,7 +794,8 @@ if st.button("💾 Сохранить Заявку в Google Sheets", disabled=n
     ]
     
     if save_data_to_gsheets(data_to_save):
-        st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена! (Сохранена как **новая** строка)")
+        if not st.session_state.k_target_row_index:
+            st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!")
         
         clear_form_state()
         time.sleep(0.5)
