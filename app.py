@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import urllib.parse
 import time
 from typing import List, Dict, Any
+# Импортируем 'math' для проверки на NaN, которые могут возникнуть при преобразовании
+import math 
 
 
 # =========================================================
@@ -84,6 +86,13 @@ def clear_form_state():
     st.session_state.k_address = ""
     st.session_state.k_comment = ""
     st.session_state.conversation_text_input = ""
+    
+def is_valid_phone(phone: str) -> bool:
+    """Проверяет, соответствует ли телефон формату 7XXXXXXXXXX."""
+    # Удаляем все нецифровые символы и проверяем длину и начало
+    normalized = re.sub(r'\D', '', phone)
+    # Формат: 11 цифр, начинается с 7
+    return len(normalized) == 11 and normalized.startswith('7')
 
 
 # =========================================================
@@ -111,7 +120,7 @@ def initialize_worksheet_headers(worksheet: gspread.Worksheet):
         current_headers = worksheet.row_values(1)
         
         if current_headers == EXPECTED_HEADERS:
-            st.info("✅ Структура листа 'ЗАЯВКИ' уже корректна.")
+            # st.info("✅ Структура листа 'ЗАЯВКИ' уже корректна.") # Комментарий для чистоты лога
             return
 
 
@@ -149,8 +158,11 @@ def load_price_list():
             )
             return pd.DataFrame()
         
-        # Преобразование цены в числовой формат
+        # Преобразование цены в числовой формат. 'errors=coerce' заменит нечисловые на NaN
         df['ЦЕНА'] = pd.to_numeric(df['ЦЕНА'], errors='coerce') 
+        # Удаляем строки с невалидной ценой
+        df.dropna(subset=['ЦЕНА'], inplace=True)
+        
         st.info(f"✅ Прайс-лист загружен успешно. Обнаружено {len(df)} позиций.")
         return df
     except gspread.exceptions.SpreadsheetNotFound:
@@ -158,7 +170,7 @@ def load_price_list():
     except gspread.exceptions.WorksheetNotFound:
         set_critical_error(f"Лист '{WORKSHEET_NAME_PRICE}' не найден.")
     except Exception as e:
-        set_critical_error("Неизвестная ошибка при загрузке прайса (проверьте заголовки).", f"Ошибка: {e}")
+        set_critical_error("Неизвестная ошибка при загрузке прайса (проверьте заголовки и формат цены).", f"Ошибка: {e}")
     return pd.DataFrame()
 
 
@@ -206,7 +218,8 @@ def parse_conversation(text: str):
     
     # 1. Извлечение номера телефона (Поиск по частоте)
     # Ищем 10-значные комбинации цифр (без учета скобок/пробелов)
-    phone_matches = re.findall(r'(?:\+7|8|\b7)?\s*\(?\s*(\d{3})\s*\)?\s*(\d{3})[-\s]*(\d{2})[-\s]*(\d{2})', text)
+    # Паттерн: (7 или 8) (опционально) + 10 цифр
+    phone_matches = re.findall(r'(?:(?:\+7|8|7)[\s(]?)?(\d{3})[\s)]?(\d{3})[-\s]?(\d{2})[-\s]?(\d{2})', text)
     
     st.session_state.parsing_log += f"Поиск телефонов (результаты): {phone_matches}\n"
     
@@ -215,20 +228,27 @@ def parse_conversation(text: str):
         for match in phone_matches:
             # Нормализация в формат 7ХХХХХХХХХХ
             normalized_phone = "7" + "".join(match)
-            phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
+            if len(normalized_phone) == 11: # Проверяем, что получилось 11 цифр
+                phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
         
-        # Выбор самого часто встречающегося номера
-        phone = max(phone_counts.items(), key=lambda item: item[1])[0]
-        st.session_state['k_client_phone'] = phone 
-        st.info(f"✅ Телефон клиента найден: **{phone}**")
-        st.session_state.parsing_log += f"Определен основной телефон: {phone}\n"
+        if phone_counts:
+            # Выбор самого часто встречающегося номера
+            phone = max(phone_counts.items(), key=lambda item: item[1])[0]
+            st.session_state['k_client_phone'] = phone 
+            st.info(f"✅ Телефон клиента найден: **{phone}**")
+            st.session_state.parsing_log += f"Определен основной телефон: {phone}\n"
+        else:
+             st.warning("⚠️ Телефон не найден. Пожалуйста, введите вручную.")
+             st.session_state.parsing_log += f"Телефон не определен.\n"
     else:
         st.warning("⚠️ Телефон не найден. Пожалуйста, введите вручную.")
         st.session_state.parsing_log += f"Телефон не определен.\n"
 
 
+
+
     # 2. Извлечение номера заявки/счета
-    order_match = re.search(r'(?:заявк[аи]|заказ|счет|№)\s*(\d+)', text, re.IGNORECASE)
+    order_match = re.search(r'(?:заявк[аи]|заказ|счет|№|номер)\s*[\W]*(\d+)', text, re.IGNORECASE)
     
     st.session_state.parsing_log += f"Поиск номера заявки (матч): {order_match.group(1) if order_match else 'None'}\n"
 
@@ -289,6 +309,7 @@ def parse_conversation(text: str):
         initial_date_str = delivery_date.strftime('%d.%m.%Y')
         year_corrected = False
         
+        # Корректируем год, пока дата в прошлом, но не перепрыгиваем больше, чем на год вперед
         while delivery_date < today and delivery_date.year < today.year + 1:
             delivery_date = delivery_date.replace(year=delivery_date.year + 1)
             year_corrected = True
@@ -318,9 +339,13 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
         st.error("Не удалось подключиться к листу для записи данных.")
         return False
     try:
+        # gspread ожидает список, содержащий только базовые типы Python (str, int, float, bool)
+        # Если в data_row есть объекты NumPy (int64, float64), JSON-сериализация упадет.
+        # Поэтому мы гарантируем, что все числовые значения конвертированы до вызова.
         orders_ws.append_row(data_row)
         return True
     except Exception as e:
+        # При возникновении ошибки записи (в т.ч. из-за типов)
         st.error(f"Ошибка записи в Google Sheets: {e}")
         return False
 
@@ -333,7 +358,8 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
 def add_item():
     """Добавляет выбранный товар в список в session_state."""
     selected_name = st.session_state['new_item_select']
-    quantity = st.session_state['new_item_qty']
+    # Преобразуем количество к базовому int, чтобы избежать int64
+    quantity = int(st.session_state['new_item_qty']) 
     
     if selected_name != "--- Выберите позицию ---" and quantity > 0:
         price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_name]
@@ -343,14 +369,14 @@ def add_item():
              return
 
 
-        # Извлекаем цену
-        price = price_row.iloc[0]['ЦЕНА']
+        # Извлекаем цену и преобразуем ее к базовому float, чтобы избежать float64
+        price = float(price_row.iloc[0]['ЦЕНА'])
         
         st.session_state.calculator_items.append({
             'НАИМЕНОВАНИЕ': selected_name,
-            'КОЛИЧЕСТВО': quantity,
-            'ЦЕНА_ЗА_ЕД': price,
-            'СУММА': price * quantity
+            'КОЛИЧЕСТВО': quantity, # int
+            'ЦЕНА_ЗА_ЕД': price, # float
+            'СУММА': price * quantity # float
         })
 
 
@@ -363,7 +389,7 @@ def remove_item(index: int):
     """Удаляет позицию из списка по индексу."""
     if 0 <= index < len(st.session_state.calculator_items):
         st.session_state.calculator_items.pop(index)
-    st.rerun()
+    # st.rerun() # убрано, т.к. Streamlit сам перерисует после on_click
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
@@ -465,10 +491,13 @@ with col2:
     # Устанавливаем дату либо из session_state, либо завтрашнюю
     default_date = st.session_state.k_delivery_date if st.session_state.k_delivery_date else datetime.today().date() + timedelta(days=1)
     
+    # Обработка случая, когда default_date - None (хотя по логике он должен быть установлен)
+    date_value = default_date if isinstance(default_date, datetime) or isinstance(default_date, datetime.date) else datetime.today().date() + timedelta(days=1)
+    
     st.date_input(
         "Дата Доставки",
         key='k_delivery_date',
-        value=default_date,
+        value=date_value,
         min_value=datetime.today().date()
     )
     
@@ -512,7 +541,9 @@ with col_qty:
 
 with col_add:
     st.markdown(" ")
-    st.button("➕ Добавить", on_click=add_item, use_container_width=True, disabled=price_df.empty)
+    # Проверка, что выбрана позиция, прежде чем включать кнопку
+    disable_add = price_df.empty or st.session_state.get('new_item_select') == price_items[0]
+    st.button("➕ Добавить", on_click=add_item, use_container_width=True, disabled=disable_add)
 
 
 # --- Блок отображения заказа ---
@@ -520,7 +551,9 @@ total_sum = 0
 if st.session_state.calculator_items:
     
     df_items = pd.DataFrame(st.session_state.calculator_items)
-    total_sum = df_items['СУММА'].sum()
+    
+    # total_sum уже будет стандартным float, так как мы его рассчитали с float в add_item
+    total_sum = df_items['СУММА'].sum() 
     
     # Display table of items
     st.dataframe(
@@ -537,7 +570,9 @@ if st.session_state.calculator_items:
     
     # Display delete buttons
     st.markdown("##### Удаление позиций:")
-    for i, item in enumerate(st.session_state.calculator_items):
+    # Отображаем в обратном порядке для удобства
+    for i in range(len(st.session_state.calculator_items) - 1, -1, -1):
+         item = st.session_state.calculator_items[i]
          col_name, col_sum, col_del = st.columns([5, 1.5, 0.5])
          with col_name:
              st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕСТВО']} шт.)")
@@ -569,7 +604,8 @@ is_ready_to_send = (
     st.session_state.k_order_number and 
     st.session_state.k_client_phone and 
     st.session_state.k_address and 
-    st.session_state.calculator_items
+    st.session_state.calculator_items and
+    is_valid_phone(st.session_state.k_client_phone) # Добавлена проверка формата телефона
 )
 
 
@@ -585,6 +621,7 @@ if not is_ready_to_send:
     missing_fields = []
     if not st.session_state.k_order_number: missing_fields.append("Номер Заявки")
     if not st.session_state.k_client_phone: missing_fields.append("Телефон Клиента")
+    elif not is_valid_phone(st.session_state.k_client_phone): missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
     if not st.session_state.k_address: missing_fields.append("Адрес Доставки")
     if not st.session_state.calculator_items: missing_fields.append("Состав Заказа")
     
@@ -605,7 +642,9 @@ if st.button("💾 Сохранить Заявку в Google Sheets", disabled=n
         st.session_state.k_delivery_date.strftime('%Y-%m-%d') if st.session_state.k_delivery_date else "",
         st.session_state.k_comment,
         order_details,
-        total_sum
+        # *** КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Явное преобразование в float, 
+        # *** чтобы избежать ошибки 'int64 is not json serializable' от NumPy/Pandas.
+        float(total_sum) if not math.isnan(total_sum) else ""
     ]
     
     if save_data_to_gsheets(data_to_save):
@@ -631,7 +670,10 @@ if is_ready_to_send:
         'ЗАКАЗ': order_details
     }
     
-    whatsapp_url = generate_whatsapp_url(st.session_state.k_client_phone, whatsapp_data, total_sum)
+    # total_sum уже должен быть float, но на всякий случай преобразуем его еще раз
+    final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
+    
+    whatsapp_url = generate_whatsapp_url(st.session_state.k_client_phone, whatsapp_data, final_total_sum)
     
     st.markdown("---")
     st.markdown(f"**Ссылка для подтверждения клиенту ({st.session_state.k_client_phone}):**")
