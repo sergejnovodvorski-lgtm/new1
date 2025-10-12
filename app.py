@@ -42,7 +42,7 @@ if 'k_client_phone' not in st.session_state:
 if 'k_order_number' not in st.session_state:
     st.session_state.k_order_number = ""
     
-# ИСПРАВЛЕНИЕ 1: Дефолтное значение для даты - None (чтобы поле было пустым)
+# ИСПРАВЛЕНИЕ: Дефолтное значение для даты - None (чтобы поле было пустым)
 if 'k_delivery_date' not in st.session_state:
     st.session_state.k_delivery_date = None
     
@@ -52,6 +52,10 @@ if 'new_item_qty' not in st.session_state:
 # НОВОЕ: Переменная для хранения лога парсинга
 if 'parsing_log' not in st.session_state:
     st.session_state.parsing_log = ""
+    
+# КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Инициализация ключа для text_area
+if 'conversation_text_input' not in st.session_state:
+    st.session_state.conversation_text_input = "" 
     
 # Функция для записи критической ошибки
 def set_critical_error(message, error_details=None):
@@ -252,7 +256,8 @@ def parse_conversation(text):
         st.session_state.parsing_log += f"Дата доставки не найдена, установлена по умолчанию: {tomorrow.strftime('%d.%m.%Y')}\n"
 
 
-    # ИСПРАВЛЕНИЕ 2: Сбросить текстовое поле, чтобы оно обновилось при st.rerun().
+    # ИСПРАВЛЕНИЕ: Сбросить текстовое поле, чтобы оно обновилось при st.rerun().
+    # Это позволяет повторно парсить новый текст.
     st.session_state.conversation_text_input = "" 
 
 
@@ -412,6 +417,7 @@ def save_order_to_gsheets(total_sum, order_items_text, form_data):
         st.session_state['new_item_qty'] = 1
         st.session_state['new_item_select'] = price_items[0]
         st.session_state.parsing_log = "" # Очистка лога
+        st.session_state.conversation_text_input = "" # Очистка текста переписки
         time.sleep(1)
         st.rerun() 
 
@@ -442,22 +448,24 @@ else:
     # ----------------------------------------------------
     st.header("1. Автозаполнение по переписке")
     
-    # ИСПРАВЛЕНИЕ: Используем value для привязки к session_state
-    conversation_text = st.text_area(
+    # КРИТИЧЕСКОЕ ИСПРАВЛЕНИЕ: Удалён параметр 'value', так как 
+    # Streamlit управляет состоянием через 'key'.
+    st.text_area(
         "Вставьте текст переписки/заказа для автоматического извлечения данных:", 
         height=150,
         placeholder="Пример: 'Мне нужен заказ №123, привезите завтра на адрес Москва, ул. Ленина, 55. Мой номер 79011234567'",
-        key="conversation_text_input",
-        value=st.session_state.get("conversation_text_input", "")
+        # Используем session_state.conversation_text_input как ключ
+        key="conversation_text_input" 
     )
     
+    # ВАЖНО: Мы используем st.session_state.conversation_text_input напрямую, 
+    # так как он обновляется Streamlit'ом.
     if st.button("🔍 ПАРСИТЬ ТЕКСТ", type="secondary"):
         parse_conversation(st.session_state.conversation_text_input)
     
-    # НОВОЕ: Временный блок для вывода технической информации
+    # Временный блок для вывода технической информации
     if st.session_state.parsing_log:
         with st.expander("🛠️ Технический лог парсинга", expanded=False):
-            # Используем st.code для моноширинного шрифта
             st.code(st.session_state.parsing_log, language='markdown') 
             
     st.divider()
@@ -491,16 +499,11 @@ else:
             value=st.session_state.k_order_number,
             key='order_number_input'
         )
-        # ИСПРАВЛЕНИЕ: value=st.session_state.k_delivery_date может быть None, что оставляет поле пустым
+        # Если k_delivery_date равно None, поле даты будет пустым
         delivery_date = st.date_input(
             "Дата Доставки", 
             value=st.session_state.k_delivery_date, 
             key='delivery_date_input',
-            # Если k_delivery_date равно None, Streamlit по умолчанию использует today(). 
-            # Чтобы избежать этого, мы должны убедиться, что value = None только при старте.
-            # Если поле пустое (None), Streamlit позволяет пользователю выбрать дату. 
-            # Однако, чтобы поле оставалось пустым при старте, но позволяло выбор, 
-            # мы оставляем текущую логику с None.
             min_value=datetime.today().date()
         )
     
@@ -612,7 +615,6 @@ else:
     with st.form("action_form", clear_on_submit=False):
         
         # Условие блокировки: Телефон, Адрес, Дата и Сумма > 0
-        # NOTE: Дата теперь может быть None, поэтому явно проверяем ее наличие
         is_disabled = (total_sum == 0 or not client_phone or not client_address or delivery_date is None)
 
 
