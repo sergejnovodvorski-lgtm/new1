@@ -29,7 +29,7 @@ EXPECTED_HEADERS = [
 
 
 # УКАЖИТЕ СВОЙ НОМЕР МЕНЕДЖЕРА 
-MANAGER_WHATSAPP_PHONE = "79000000000" # Используется как запасной
+MANAGER_WHATSAPP_PHONE = "79000000000" 
 
 
 st.set_page_config(
@@ -52,7 +52,7 @@ def get_default_delivery_date():
 
 
 def clear_form_state():
-    """Сброс всех полей после успешной отправки. (ИСПРАВЛЕНО: Установка пустых значений вместо удаления ключей)"""
+    """Сброс всех полей после успешной отправки."""
     st.session_state.calculator_items = []
     
     # Устанавливаем пустые строки вместо удаления ключей, чтобы избежать ошибки StreamlitAPIException
@@ -71,7 +71,7 @@ def clear_form_state():
     
     # Сброс индекса строки для обновления, чтобы следующее сохранение было добавлением
     st.session_state.k_target_row_index = None 
-    st.session_state.app_mode = 'new' # Устанавливаем режим на "Новая заявка"
+    st.session_state.app_mode = 'new' 
 
 
 def is_valid_phone(phone: str) -> str:
@@ -110,6 +110,8 @@ def switch_mode():
         # Обновляем поле ввода номера на текущий (либо новый, либо пустой для ввода)
         st.session_state.k_order_number_input = st.session_state.k_order_number if new_mode == 'new' else ""
         
+    st.rerun() # Явный перезапуск для обновления UI
+    
 # =========================================================
 # 2. ФУНКЦИИ ПОДКЛЮЧЕНИЯ И КЭШИРОВАНИЯ
 # =========================================================
@@ -245,7 +247,7 @@ def load_order_data(order_number: str):
     orders_ws = get_orders_worksheet()
     if not orders_ws:
         st.error("Не удалось подключиться к базе данных.")
-        return
+        return False # Возвращаем False, чтобы не делать RERUN
 
 
     try:
@@ -256,8 +258,8 @@ def load_order_data(order_number: str):
         
         if target_row.empty:
             st.warning(f"⚠️ Заявка с номером **{order_number}** не найдена.")
-            st.session_state.k_target_row_index = None # Убедимся, что это новая заявка
-            return
+            st.session_state.k_target_row_index = None 
+            return False
 
 
         row = target_row.iloc[0].to_dict()
@@ -288,17 +290,18 @@ def load_order_data(order_number: str):
         
         st.success(f"✅ Данные заявки №**{order_number}** успешно загружены для корректировки. (Строка {gspread_row_index})")
         st.warning("Внимание: При сохранении **существующая заявка будет перезаписана**!")
+        
+        return True # Возвращаем True при успехе
 
 
     except Exception as e:
         st.error(f"Ошибка при загрузке данных заявки: {e}")
+        return False
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
-    """Парсит строковое представление заказа (из Google Sheets) в список элементов калькулятора."""
+    # ... (функция без изменений)
     items = []
-    
-    # Регулярное выражение для поиска строк: НАИМЕНОВАНИЕ - КОЛИЧЕСТВО шт. (по ЦЕНА РУБ.)
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
     
     for line in order_text.split('\n'):
@@ -326,7 +329,7 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
 # =========================================================
 
 
-# Инициализация ресурсов
+# ... (Инициализация без изменений)
 price_df = load_price_list() 
 orders_ws = get_orders_worksheet()
 price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist() if not price_df.empty else ["--- Прайс не загружен ---"]
@@ -338,14 +341,12 @@ if 'calculator_items' not in st.session_state:
     st.session_state.calculator_items = []
 
 
-# Ключ для хранения режима работы: 'new' или 'edit'
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'new' 
 if 'mode_selector_value' not in st.session_state:
     st.session_state.mode_selector_value = 'Новая заявка'
 
 
-# Ключ для хранения номера строки, которую нужно обновить
 if 'k_target_row_index' not in st.session_state:
     st.session_state.k_target_row_index = None 
 
@@ -391,8 +392,11 @@ def parse_conversation(text: str):
     
     st.session_state.parsing_log = f"--- ЛОГ ПАРСИНГА ({datetime.now().strftime('%H:%M:%S')}) ---\n"
     
+    # Флаг, который показывает, была ли успешная загрузка данных
+    loaded_data = False 
+
+
     # 1. Извлечение номера телефона (Улучшенная логика)
-    # Ищем последовательности из 7-11 цифр, затем нормализуем
     phone_matches_raw = re.findall(r'(\d{7,11})', text) 
     phone_counts = {}
     
@@ -423,12 +427,15 @@ def parse_conversation(text: str):
 
 
     if order_match and st.session_state.app_mode == 'edit':
-        # В режиме редактирования, если нашли номер, устанавливаем его для загрузки
+        # В режиме редактирования, если нашли номер, пытаемся загрузить данные
         found_order_num = order_match.group(1)
         st.session_state['k_order_number_input'] = found_order_num
         st.session_state['k_order_number'] = found_order_num
-        load_order_data(found_order_num)
-        st.info(f"✅ Номер Заявки найден и установлен: {found_order_num}. Данные загружены.")
+        
+        # Если загрузка успешна, устанавливаем флаг
+        if load_order_data(found_order_num):
+             loaded_data = True
+             st.info(f"✅ Номер Заявки найден и установлен: {found_order_num}. Данные загружены.")
     elif order_match and st.session_state.app_mode == 'new':
         st.info(f"💡 Обнаружен номер {order_match.group(1)}, но в режиме 'Новая заявка' он игнорируется.")
         
@@ -437,6 +444,7 @@ def parse_conversation(text: str):
     relative_match = ""
     today = datetime.today().date()
     
+    # ... (код парсинга даты без изменений)
     if re.search(r'послезавтра', text, re.IGNORECASE):
         delivery_date = today + timedelta(days=2)
         relative_match = "послезавтра (+2 дня)"
@@ -489,9 +497,12 @@ def parse_conversation(text: str):
         st.session_state.parsing_log += f"Дата доставки не найдена, установлена по умолчанию: {tomorrow.strftime('%d.%m.%Y')}\n"
 
 
-    # Принудительный перезапуск только если не было загрузки данных в блоке 2
-    if not (order_match and st.session_state.app_mode == 'edit'):
+    # Явный перезапуск, если НЕ БЫЛО загрузки данных. 
+    # Если данные были загружены (loaded_data=True), перезапуск уже произойдет внутри load_order_data
+    if not loaded_data:
         st.rerun() 
+
+
 
 
 def save_data_to_gsheets(data_row: List[Any]) -> bool:
@@ -559,7 +570,7 @@ def remove_item(index: int):
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
-    """Генерирует ссылку на WhatsApp с предзаполненным текстом. (ИСПРАВЛЕНО: Нормализация)"""
+    """Генерирует ссылку на WhatsApp с предзаполненным текстом. (Использует нормализованный номер)"""
     
     text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа и подтвердите их:\n"
     text += f"🆔 Номер Заявки: {order_data['НОМЕР_ЗАЯВКИ']}\n"
@@ -578,10 +589,8 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     # !!! Нормализация номера для WhatsApp
     normalized_phone = is_valid_phone(target_phone)
     if not normalized_phone:
-        # Если номер невалиден, используем номер менеджера
         target_phone_final = MANAGER_WHATSAPP_PHONE
     else:
-        # WhatsApp требует префикс '+'
         target_phone_final = '+' + normalized_phone 
         
     return f"https://wa.me/{target_phone_final}?text={encoded_text}"
@@ -651,9 +660,10 @@ with col_btn:
     if st.session_state.app_mode == 'edit':
         # Кнопка для загрузки данных, видна только в режиме редактирования
         if st.button("🔄 Загрузить Заявку", type="secondary", use_container_width=True):
-             # Переносим значение из поля ввода в основной ключ для обработки
              st.session_state.k_order_number = st.session_state.k_order_number_input
-             load_order_data(st.session_state.k_order_number)
+             # !!! Вызываем load_order_data и сразу делаем RERUN, чтобы обновить все виджеты
+             if load_order_data(st.session_state.k_order_number):
+                 st.rerun() 
     else:
         # В режиме "Новая" кнопка "Очистить"
         if st.button("🧼 Очистить Форму", type="secondary", use_container_width=True):
@@ -878,10 +888,10 @@ if st.button(button_label, disabled=not is_ready_to_send, type=button_type, use_
             st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!")
 
 
-        # ОЧИСТКА: Вызываем clear_form_state() и позволяем Streamlit завершить цикл
+        # ОЧИСТКА: Вызываем clear_form_state()
         clear_form_state()
         time.sleep(0.5)
-        # !!! УДАЛЕН st.rerun() для предотвращения StreamlitAPIException
+        st.rerun() # Явный перезапуск после очистки для обновления всех полей
 
 
 # 2. Блок генерации ссылки WhatsApp
@@ -898,6 +908,7 @@ if is_ready_to_send:
     
     final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
     
+    # Используем valid_phone, который уже нормализован к формату 7XXXXXXXXXX
     whatsapp_url = generate_whatsapp_url(valid_phone, whatsapp_data, final_total_sum)
     
     st.markdown("---")
