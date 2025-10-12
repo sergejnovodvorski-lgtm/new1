@@ -569,7 +569,7 @@ if st.session_state.calculator_items:
          item = st.session_state.calculator_items[i]
          col_name, col_sum, col_del = st.columns([5, 1.5, 0.5])
          with col_name:
-             st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕЕСТВО']} шт.)")
+             st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕСТВО']} шт.)")
          with col_sum:
              st.write(f"**{item['СУММА']:,.2f} РУБ.**")
          with col_del:
