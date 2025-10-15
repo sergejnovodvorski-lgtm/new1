@@ -272,6 +272,9 @@ def load_order_data(order_number: str):
     """
     Загружает данные заявки по номеру из Google Sheets и обновляет st.session_state,
     сохраняя индекс строки для последующего обновления.
+    
+    ИСПРАВЛЕНО: Теперь ищет последнюю (самую свежую) запись, чтобы избежать редактирования 
+    старых дубликатов, если такие есть.
     """
     orders_ws = get_orders_worksheet()
     if not orders_ws:
@@ -280,21 +283,28 @@ def load_order_data(order_number: str):
 
 
     try:
+        # Получаем все записи (кроме заголовка)
         data = orders_ws.get_all_records()
         df = pd.DataFrame(data)
         
-        target_row = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
+        # Фильтруем по номеру заявки
+        target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
         
-        if target_row.empty:
+        if target_rows.empty:
             st.warning(f"⚠️ Заявка с номером **{order_number}** не найдена.")
             st.session_state.k_target_row_index = None 
             return False
 
 
-        row = target_row.iloc[0].to_dict()
+        # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ДЛЯ ПЕРЕЗАПИСИ: Берем ПОСЛЕДНЮЮ запись ---
+        # Индекс в исходном DataFrame (начиная с 0)
+        row_index_in_df = target_rows.index[-1] 
+        # Сама строка
+        row = target_rows.iloc[-1].to_dict()
         
-        # 1. Сохранение номера строки для обновления
-        gspread_row_index = target_row.index[0] + 2 
+        # 1. Сохранение номера строки для обновления (индекс в gspread = индекс в df + 2)
+        # +2: 1 заголовок + 1 из-за 0-индексации
+        gspread_row_index = row_index_in_df + 2 
         st.session_state.k_target_row_index = gspread_row_index
 
 
@@ -688,6 +698,7 @@ col_num, col_btn = st.columns([3, 1])
 
 
 with col_num:
+    # Используем key='k_order_number_input' для поля ввода номера
     st.text_input(
         "Номер Заявки / Счёта", 
         key='k_order_number_input',
@@ -700,6 +711,7 @@ with col_btn:
     st.markdown(" ") 
     if st.session_state.app_mode == 'edit':
         if st.button("🔄 Загрузить Заявку", type="secondary", use_container_width=True):
+            # При загрузке k_order_number обновляется из k_order_number_input
             st.session_state.k_order_number = st.session_state.k_order_number_input
             load_order_data(st.session_state.k_order_number) 
     else:
@@ -880,13 +892,24 @@ is_ready_to_send = (
 )
 
 
+# --- ДОБАВЛЕННАЯ ЛОГИКА ДЛЯ ПРЕДОТВРАЩЕНИЯ ДУБЛИРОВАНИЯ В РЕЖИМЕ РЕДАКТИРОВАНИЯ ---
+can_save = is_ready_to_send
+
+
+if st.session_state.app_mode == 'edit' and not st.session_state.k_target_row_index:
+     can_save = False
+     if is_ready_to_send: # Поля заполнены, но заявка не загружена
+         st.error("❌ В режиме 'Редактировать' необходимо сначала загрузить заявку по номеру, нажав 'Загрузить Заявку'.")
+# ------------------------------------------------------------------------------------
+
+
 order_details = "\n".join(
     [f"{item['НАИМЕНОВАНИЕ']} - {item['КОЛИЧЕСТВО']} шт. (по {item['ЦЕНА_ЗА_ЕД']:,.2f} РУБ.)" 
      for item in st.session_state.calculator_items]
 )
 
 
-if not is_ready_to_send:
+if not is_ready_to_send and st.session_state.app_mode == 'new':
     missing_fields = []
     if not st.session_state.k_order_number: missing_fields.append("Номер Заявки")
     if not st.session_state.k_client_phone: missing_fields.append("Телефон Клиента")
@@ -894,7 +917,8 @@ if not is_ready_to_send:
     if not st.session_state.k_address: missing_fields.append("Адрес Доставки")
     if not st.session_state.calculator_items: missing_fields.append("Состав Заказа")
     
-    st.error(f"❌ Заявка не готова к сохранению! Необходимо заполнить: {', '.join(missing_fields)}")
+    if missing_fields:
+        st.error(f"❌ Заявка не готова к сохранению! Необходимо заполнить: {', '.join(missing_fields)}")
 
 
 # 1. Подготовка данных
@@ -918,7 +942,8 @@ is_update = bool(st.session_state.k_target_row_index)
 
 
 # 2. Кнопка "Сохранить в CRM"
-if st.button(button_label, disabled=not is_ready_to_send, type=button_type, use_container_width=True):
+# Используем can_save для проверки возможности сохранения
+if st.button(button_label, disabled=not can_save, type=button_type, use_container_width=True):
     handle_save_and_clear(data_to_save, is_update)
 
 
