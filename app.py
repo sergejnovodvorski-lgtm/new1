@@ -6,8 +6,10 @@ from datetime import datetime, timedelta
 import urllib.parse
 import time
 from typing import List, Dict, Any
-import math 
+import math
 from io import StringIO
+
+
 
 
 # =========================================================
@@ -15,10 +17,14 @@ from io import StringIO
 # =========================================================
 
 
+
+
 # Настройки Google Sheets
 SPREADSHEET_NAME = "Start" 
 WORKSHEET_NAME_ORDERS = "ЗАЯВКИ"
 WORKSHEET_NAME_PRICE = "ПРАЙС"
+
+
 
 
 # Заголовки, которые должны быть на листе 'ЗАЯВКИ'
@@ -28,8 +34,12 @@ EXPECTED_HEADERS = [
 ]
 
 
+
+
 # УКАЖИТЕ СВОЙ НОМЕР МЕНЕДЖЕРА 
 MANAGER_WHATSAPP_PHONE = "79000000000" 
+
+
 
 
 st.set_page_config(
@@ -37,6 +47,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+
 
 
 # --- Вспомогательные функции ---
@@ -49,6 +61,8 @@ def set_critical_error(message, error_details=None):
     
 def get_default_delivery_date():
     return datetime.today().date() + timedelta(days=1)
+
+
 
 
 def clear_form_state():
@@ -74,6 +88,8 @@ def clear_form_state():
     st.session_state.app_mode = 'new' 
 
 
+
+
 def is_valid_phone(phone: str) -> str:
     """Нормализует телефон к формату 7XXXXXXXXXX. Возвращает нормализованный номер или пустую строку."""
     normalized = re.sub(r'\D', '', phone) # Удаляем все не-цифры
@@ -90,6 +106,8 @@ def is_valid_phone(phone: str) -> str:
     return "" # Возвращаем пустую строку, если невалиден
 
 
+
+
 def switch_mode():
     """Переключает режим работы и обновляет состояние формы."""
     new_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
@@ -102,6 +120,8 @@ def switch_mode():
         else:
             # При переходе в режим 'edit' просто сбрасываем индекс редактирования
             st.session_state.k_target_row_index = None 
+
+
 
 
         st.session_state.app_mode = new_mode
@@ -117,6 +137,8 @@ def switch_mode():
 # =========================================================
 
 
+
+
 @st.cache_resource(ttl=3600)
 def get_gsheet_client():
     """Аутентификация и получение клиента gspread."""
@@ -129,6 +151,8 @@ def get_gsheet_client():
     except Exception as e:
         set_critical_error("Ошибка аутентификации gspread.", f"Ошибка: {e}")
         return None
+
+
 
 
 def initialize_worksheet_headers(worksheet: gspread.Worksheet):
@@ -151,6 +175,8 @@ def initialize_worksheet_headers(worksheet: gspread.Worksheet):
 
     except Exception as e:
         set_critical_error("Ошибка при инициализации заголовков листа 'ЗАЯВКИ'.", f"Ошибка: {e}")
+
+
 
 
 
@@ -214,6 +240,8 @@ def load_price_list():
     return pd.DataFrame()
 
 
+
+
 @st.cache_resource
 def get_orders_worksheet():
     """Получение и кэширование рабочего листа для заявок."""
@@ -234,9 +262,13 @@ def get_orders_worksheet():
         return None
 
 
+
+
 # =========================================================
 # 3. ФУНКЦИЯ ЗАГРУЗКИ ДАННЫХ ДЛЯ КОРРЕКТИРОВКИ
 # =========================================================
+
+
 
 
 def load_order_data(order_number: str):
@@ -248,6 +280,8 @@ def load_order_data(order_number: str):
     if not orders_ws:
         st.error("Не удалось подключиться к базе данных.")
         return False # Возвращаем False, чтобы не делать RERUN
+
+
 
 
     try:
@@ -262,11 +296,15 @@ def load_order_data(order_number: str):
             return False
 
 
+
+
         row = target_row.iloc[0].to_dict()
         
         # 1. Сохранение номера строки для обновления
         gspread_row_index = target_row.index[0] + 2
         st.session_state.k_target_row_index = gspread_row_index
+
+
 
 
         # 2. Обновляем основные поля формы
@@ -284,6 +322,8 @@ def load_order_data(order_number: str):
             st.session_state.k_delivery_date = get_default_delivery_date()
 
 
+
+
         # 4. Парсим состав заказа
         order_text = str(row.get('ЗАКАЗ', ''))
         st.session_state.calculator_items = parse_order_text_to_items(order_text)
@@ -294,13 +334,16 @@ def load_order_data(order_number: str):
         return True # Возвращаем True при успехе
 
 
+
+
     except Exception as e:
         st.error(f"Ошибка при загрузке данных заявки: {e}")
         return False
 
 
+
+
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
-    # ... (функция без изменений)
     items = []
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
     
@@ -324,15 +367,20 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
     return items
 
 
+
+
 # =========================================================
 # 4. ИНИЦИАЛИЗАЦИЯ SESSION STATE
 # =========================================================
 
 
-# ... (Инициализация без изменений)
+
+
 price_df = load_price_list() 
 orders_ws = get_orders_worksheet()
 price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist() if not price_df.empty else ["--- Прайс не загружен ---"]
+
+
 
 
 if 'critical_error' not in st.session_state:
@@ -341,18 +389,31 @@ if 'calculator_items' not in st.session_state:
     st.session_state.calculator_items = []
 
 
+
+
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'new' 
 if 'mode_selector_value' not in st.session_state:
     st.session_state.mode_selector_value = 'Новая заявка'
 
 
+
+
 if 'k_target_row_index' not in st.session_state:
     st.session_state.k_target_row_index = None 
+    
+if 'do_clear_form' not in st.session_state:
+    st.session_state.do_clear_form = False # <-- НОВЫЙ ФЛАГ
+
+
+if 'last_success_message' not in st.session_state:
+    st.session_state.last_success_message = None # <-- Для хранения сообщения об успехе
 
 
 if 'k_order_number' not in st.session_state:
     st.session_state.k_order_number = load_last_order_number()
+
+
 
 
 if 'k_order_number_input' not in st.session_state:
@@ -376,15 +437,18 @@ if 'parsing_log' not in st.session_state:
     
 if 'conversation_text_input' not in st.session_state:
     st.session_state.conversation_text_input = "" 
-
-
+    
 if 'new_item_select' not in st.session_state:
     st.session_state['new_item_select'] = price_items[0]
+
+
 
 
 # =========================================================
 # 5. ФУНКЦИИ ЛОГИКИ (ПАРСИНГ И ЗАПИСЬ)
 # =========================================================
+
+
 
 
 def parse_conversation(text: str):
@@ -394,6 +458,8 @@ def parse_conversation(text: str):
     
     # Флаг, который показывает, была ли успешная загрузка данных
     loaded_data = False 
+
+
 
 
     # 1. Извлечение номера телефона (Улучшенная логика)
@@ -426,6 +492,8 @@ def parse_conversation(text: str):
     st.session_state.parsing_log += f"Поиск номера заявки (матч): {order_match.group(1) if order_match else 'None'}\n"
 
 
+
+
     if order_match and st.session_state.app_mode == 'edit':
         # В режиме редактирования, если нашли номер, пытаемся загрузить данные
         found_order_num = order_match.group(1)
@@ -453,6 +521,8 @@ def parse_conversation(text: str):
         relative_match = "завтра (+1 день)"
     
     st.session_state.parsing_log += f"Поиск относительной даты: {relative_match or 'Нет'}\n"
+
+
 
 
     if not delivery_date:
@@ -484,6 +554,8 @@ def parse_conversation(text: str):
             year_corrected = True
 
 
+
+
         if year_corrected:
             st.warning(f"⚠️ Обнаруженная дата ({initial_date_str}) была в прошлом. Год скорректирован на **{delivery_date.year}**.")
             st.session_state.parsing_log += f"Коррекция года: Исходная {initial_date_str}, Скорректирована на {delivery_date.year}\n"
@@ -497,10 +569,14 @@ def parse_conversation(text: str):
         st.session_state.parsing_log += f"Дата доставки не найдена, установлена по умолчанию: {tomorrow.strftime('%d.%m.%Y')}\n"
 
 
+
+
     # Явный перезапуск, если НЕ БЫЛО загрузки данных. 
     # Если данные были загружены (loaded_data=True), перезапуск уже произойдет внутри load_order_data
     if not loaded_data:
         st.rerun() 
+
+
 
 
 
@@ -528,9 +604,34 @@ def save_data_to_gsheets(data_row: List[Any]) -> bool:
             return False
 
 
+# --- НОВАЯ ФУНКЦИЯ ОБРАБОТЧИК ---
+def handle_save_and_clear(data_to_save: List[Any], is_update: bool):
+    """
+    Обработчик сохранения данных. Сохраняет в Google Sheets и устанавливает
+    флаг для последующей очистки и перезапуска вне блока st.button.
+    """
+    if save_data_to_gsheets(data_to_save):
+        
+        # Сообщение об успехе сохраняем до очистки
+        success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно {'перезаписана' if is_update else 'сохранена'}!"
+        
+        # Храним сообщение для отображения после перезапуска
+        st.session_state.last_success_message = success_message
+        
+        # Устанавливаем флаг, чтобы Streamlit знал, что нужно очистить форму и перезапуститься
+        st.session_state.do_clear_form = True
+        
+    # Важно: st.rerun() здесь не вызываем!
+# ---------------------------------
+
+
+
+
 # =========================================================
 # 6. ФУНКЦИИ КАЛЬКУЛЯТОРА И ИНТЕРФЕЙСА
 # =========================================================
+
+
 def add_item():
     """Добавляет выбранный товар в список в session_state."""
     selected_name = st.session_state['new_item_select']
@@ -548,6 +649,8 @@ def add_item():
              return
 
 
+
+
         price = float(price_row.iloc[0]['ЦЕНА'])
         
         st.session_state.calculator_items.append({
@@ -558,8 +661,12 @@ def add_item():
         })
 
 
+
+
         st.session_state['new_item_qty'] = 1
         st.session_state['new_item_select'] = price_items[0] 
+
+
 
 
 def remove_item(index: int):
@@ -567,6 +674,8 @@ def remove_item(index: int):
     if 0 <= index < len(st.session_state.calculator_items):
         st.session_state.calculator_items.pop(index)
     st.rerun()
+
+
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
@@ -603,12 +712,18 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
 # =========================================================
 
 
+
+
 if st.session_state.critical_error:
     st.error(st.session_state.critical_error)
     st.stop() 
 
 
+
+
 st.title("Ввод Новой Заявки CRM 📝")
+
+
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -616,7 +731,11 @@ st.title("Ввод Новой Заявки CRM 📝")
 # ----------------------------------------------------------------------------------------------------------------------
 
 
+
+
 st.subheader("Выбор Режима Работы")
+
+
 
 
 # Радио-кнопка для выбора режима
@@ -630,7 +749,11 @@ st.radio(
 )
 
 
+
+
 st.session_state.app_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
+
+
 
 
 mode_text = (
@@ -641,8 +764,12 @@ mode_text = (
 st.info(mode_text)
 
 
+
+
 # --- Блок Номера Заявки ---
 col_num, col_btn = st.columns([3, 1])
+
+
 
 
 with col_num:
@@ -671,7 +798,11 @@ with col_btn:
             st.rerun()
 
 
+
+
 st.markdown("---")
+
+
 
 
 # --- Блок Парсинга ---
@@ -689,17 +820,25 @@ with st.expander("🤖 Парсинг Переписки (извлекает т�
             parse_conversation(conversation_text)
 
 
+
+
     if st.session_state.parsing_log:
         st.caption("Лог Парсинга:")
         st.code(st.session_state.parsing_log, language='text')
 
 
+
+
 st.markdown("---")
+
+
 
 
 # ----------------------------------------------------------------------------------------------------------------------
 ## Форма Ввода Основных Данных
 # ----------------------------------------------------------------------------------------------------------------------
+
+
 
 
 st.subheader("Основные Данные Заявки")
@@ -708,6 +847,8 @@ st.subheader("Основные Данные Заявки")
 
 
 col1, col2 = st.columns(2)
+
+
 
 
 with col1:
@@ -723,6 +864,8 @@ with col1:
         "Телефон Клиента (с 7)", 
         key='k_client_phone'
     )
+
+
 
 
 with col2:
@@ -745,7 +888,11 @@ st.text_area(
 )
 
 
+
+
 st.markdown("---")
+
+
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -753,10 +900,16 @@ st.markdown("---")
 # ----------------------------------------------------------------------------------------------------------------------
 
 
+
+
 st.subheader("Состав Заказа (Калькулятор)")
 
 
+
+
 col_item, col_qty, col_add = st.columns([4, 1, 1])
+
+
 
 
 with col_item:
@@ -768,6 +921,8 @@ with col_item:
     )
 
 
+
+
 with col_qty:
     st.number_input(
         "Кол-во", 
@@ -777,10 +932,14 @@ with col_qty:
     )
 
 
+
+
 with col_add:
     st.markdown(" ")
     disable_add = price_df.empty or st.session_state.get('new_item_select') == price_items[0]
     st.button("➕ Добавить", on_click=add_item, use_container_width=True, disabled=disable_add)
+
+
 
 
 total_sum = 0
@@ -813,13 +972,19 @@ if st.session_state.calculator_items:
              st.button("❌", key=f"del_{i}", on_click=remove_item, args=(i,))
 
 
+
+
     st.markdown(f"### 💰 **ИТОГО: {total_sum:,.2f} РУБ.**")
     
 else:
     st.info("В заказе пока нет позиций. Добавьте товар.")
 
 
+
+
 st.markdown("---")
+
+
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -827,11 +992,17 @@ st.markdown("---")
 # ----------------------------------------------------------------------------------------------------------------------
 
 
+
+
 st.subheader("Завершение Заявки")
+
+
 
 
 # Проверяем валидность телефона, используя нормализацию
 valid_phone = is_valid_phone(st.session_state.get('k_client_phone', ''))
+
+
 
 
 is_ready_to_send = (
@@ -842,10 +1013,14 @@ is_ready_to_send = (
 )
 
 
+
+
 order_details = "\n".join(
     [f"{item['НАИМЕНОВАНИЕ']} - {item['КОЛИЧЕСТВО']} шт. (по {item['ЦЕНА_ЗА_ЕД']:,.2f} РУБ.)" 
      for item in st.session_state.calculator_items]
 )
+
+
 
 
 if not is_ready_to_send:
@@ -861,40 +1036,62 @@ if not is_ready_to_send:
 
 
 
-# 1. Кнопка "Сохранить в CRM"
+# 1. Подготовка данных
 button_label = "💾 Перезаписать Заявку" if st.session_state.k_target_row_index else "💾 Сохранить Новую Заявку"
 button_type = "danger" if st.session_state.k_target_row_index else "primary"
 
 
+
+
+final_total_sum = float(total_sum) if not math.isnan(total_sum) else ""
+is_update = bool(st.session_state.k_target_row_index)
+
+
+data_to_save = [
+    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    st.session_state.k_order_number,
+    valid_phone, # Используем нормализованный телефон
+    st.session_state.k_address,
+    st.session_state.k_delivery_date.strftime('%Y-%m-%d') if st.session_state.k_delivery_date else "",
+    st.session_state.k_comment,
+    order_details,
+    final_total_sum 
+]
+
+
+# 2. Кнопка "Сохранить в CRM"
+# Вызываем обработчик, который установит флаг st.session_state.do_clear_form
 if st.button(button_label, disabled=not is_ready_to_send, type=button_type, use_container_width=True):
+    handle_save_and_clear(data_to_save, is_update)
+
+
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# *ИСПРАВЛЕНИЕ ОШИБКИ STREAMLITAPIEXCEPTION:* Логика очистки и перезапуска, вынесенная из колбэка кнопки
+# ----------------------------------------------------------------------------------------------------------------------
+if st.session_state.do_clear_form:
     
-    final_total_sum = float(total_sum) if not math.isnan(total_sum) else ""
+    # Показываем сообщение об успехе (хранится во временном стейте)
+    if st.session_state.get('last_success_message'):
+         st.success(st.session_state.last_success_message)
+         st.session_state.last_success_message = None
+         
+    # Очистка формы
+    clear_form_state()
     
-    data_to_save = [
-        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        st.session_state.k_order_number,
-        valid_phone, # Используем нормализованный телефон
-        st.session_state.k_address,
-        st.session_state.k_delivery_date.strftime('%Y-%m-%d') if st.session_state.k_delivery_date else "",
-        st.session_state.k_comment,
-        order_details,
-        final_total_sum 
-    ]
+    # Сбрасываем флаг
+    st.session_state.do_clear_form = False
     
-    if save_data_to_gsheets(data_to_save):
-        if not st.session_state.k_target_row_index:
-            st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!")
-        else:
-            st.success(f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!")
+    # Явный перезапуск, который теперь безопаснее
+    time.sleep(0.5) 
+    st.rerun()
+# ----------------------------------------------------------------------------------------------------------------------
 
 
-        # ОЧИСТКА: Вызываем clear_form_state()
-        clear_form_state()
-        time.sleep(0.5)
-        st.rerun() # Явный перезапуск после очистки для обновления всех полей
 
 
-# 2. Блок генерации ссылки WhatsApp
+# 3. Блок генерации ссылки WhatsApp
 if is_ready_to_send:
     
     whatsapp_data = {
@@ -922,3 +1119,6 @@ if is_ready_to_send:
         unsafe_allow_html=True
     )
     st.caption("Кликните, чтобы открыть чат с предзаполненным сообщением.")
+
+
+# Конец файла
