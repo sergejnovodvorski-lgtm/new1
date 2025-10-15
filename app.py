@@ -54,7 +54,8 @@ def get_default_delivery_date():
 def load_last_order_number_safe() -> str:
     """Безопасная обертка для load_last_order_number, чтобы не вызывать ошибку на старте."""
     try:
-        return load_last_order_number()
+        # Предварительно кэшированная функция
+        return load_last_order_number() 
     except Exception:
         return "1001"
 
@@ -63,11 +64,11 @@ def clear_form_state():
     """
     Сброс всех полей после успешной отправки.
     ВАЖНО: Устанавливаем пустые строки ("") для ключей сессии, связанных с виджетами,
-    чтобы избежать StreamlitAPIException.
+    чтобы избежать StreamlitAPIException, когда функция вызывается из безопасного блока.
     """
     st.session_state.calculator_items = []
     
-    # Сброс полей ввода
+    # Сброс полей ввода, привязанных к виджетам
     st.session_state['k_client_phone'] = "" 
     st.session_state['k_address'] = "" 
     st.session_state['k_comment'] = "" 
@@ -102,21 +103,24 @@ def is_valid_phone(phone: str) -> str:
     return "" # Возвращаем пустую строку, если невалиден
 
 
+# ИСПРАВЛЕННЫЙ ВЫЗОВ
 def switch_mode():
-    """Переключает режим работы и обновляет состояние формы."""
+    """Переключает режим работы и обновляет состояние формы (безопасно)."""
     new_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
     
     if st.session_state.app_mode != new_mode:
         
         if new_mode == 'new':
-            clear_form_state() 
+            # Сброс не-виджет ключей, остальные очистятся через rerun
+            st.session_state.calculator_items = []
+            st.session_state.k_target_row_index = None
+            st.session_state.parsing_log = ""
+            st.session_state.conversation_text_input = ""
         else:
             st.session_state.k_target_row_index = None 
 
 
         st.session_state.app_mode = new_mode
-        st.session_state.parsing_log = ""
-        st.session_state.conversation_text_input = ""
         st.session_state.k_order_number_input = st.session_state.k_order_number if new_mode == 'new' else ""
         
     st.rerun() # Явный перезапуск для обновления UI
@@ -422,6 +426,7 @@ def parse_conversation(text: str):
     
     if phone_counts:
         phone = max(phone_counts.items(), key=lambda item: item[1])[0]
+        # Изменение ключа, связанного с виджетом
         st.session_state['k_client_phone'] = phone 
         st.info(f"✅ Телефон клиента найден: **{phone}**")
         st.session_state.parsing_log += f"Определен основной телефон: {phone}\n"
@@ -497,6 +502,7 @@ def parse_conversation(text: str):
             st.warning(f"⚠️ Обнаруженная дата ({initial_date_str}) была в прошлом. Год скорректирован на **{delivery_date.year}**.")
             st.session_state.parsing_log += f"Коррекция года: Исходная {initial_date_str}, Скорректирована на {delivery_date.year}\n"
             
+        # Изменение ключа, связанного с виджетом
         st.session_state['k_delivery_date'] = delivery_date
         st.info(f"✅ Дата Доставки найдена: **{delivery_date.strftime('%d.%m.%Y')}**")
     else:
@@ -699,9 +705,10 @@ with col_btn:
              st.session_state.k_order_number = st.session_state.k_order_number_input
              load_order_data(st.session_state.k_order_number) 
     else:
+        # ИСПРАВЛЕНО: используем флаг для безопасной очистки
         if st.button("🧼 Очистить Форму", type="secondary", use_container_width=True):
-            clear_form_state()
-            st.rerun()
+            st.session_state.do_clear_form = True # Устанавливаем флаг
+            # Очистка и rerun произойдут в безопасном блоке ниже
 
 
 st.markdown("---")
