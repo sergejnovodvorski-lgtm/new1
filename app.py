@@ -139,6 +139,7 @@ def get_default_delivery_time():
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Логика приложения)
 # =========================================================
 def reset_form_fields():
+    """Полностью сбрасывает все поля формы до начальных значений."""
     st.session_state.k_order_number = ""
     st.session_state.k_client_phone = ""
     st.session_state.k_address = ""
@@ -146,16 +147,20 @@ def reset_form_fields():
     st.session_state.k_delivery_date = get_default_delivery_date()
     st.session_state.k_delivery_time = get_default_delivery_time()
     st.session_state.calculator_items = []
-    # Сброс поля количества
-    if 'new_item_qty_input' in st.session_state:
-        st.session_state.new_item_qty_input = 1
-    # Сброс поля комментария к позиции
-    if 'new_item_comment_input' in st.session_state:
-        st.session_state.new_item_comment_input = ""
+    
+    # Сброс полей ввода товара (безопасное удаление ключа)
+    for key in ['new_item_qty_input', 'new_item_comment_input']:
+        if key in st.session_state:
+            del st.session_state[key]
+    
+    # После удаления, необходимо переинициализировать их для следующего цикла main()
+    # (Это переопределяется в main, но для ясности оставим здесь)
+    st.session_state.new_item_qty_input = 1
+    st.session_state.new_item_comment_input = ""
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
-    """Парсит текст заказа обратно в список позиций с учетом нового комментария."""
+    """Парсит текст заказа обратно в список позиций с учетом комментария."""
     items = []
     # Паттерн для разбора: (Товар) - (Кол-во) шт. (по (Цена) РУБ.) [| Комментарий]
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)(?:\s*\|\s*(.*))?')
@@ -166,7 +171,7 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
             name = match.group(1).strip()
             qty = int(match.group(2))
             price_str = match.group(3).replace(' ', '').replace(',', '.')
-            comment = match.group(4).strip() if match.group(4) else "" # Группа 4 - комментарий
+            comment = match.group(4).strip() if match.group(4) else ""
             
             try:
                 price_per_unit = float(price_str)
@@ -178,60 +183,49 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
                 'КОЛИЧЕСТВО': qty,
                 'ЦЕНА_ЗА_ЕД': price_per_unit,
                 'СУММА': price_per_unit * qty,
-                'КОММЕНТАРИЙ_ПОЗИЦИИ': comment # Добавлено новое поле
+                'КОММЕНТАРИЙ_ПОЗИЦИИ': comment
             })
     return items
 
 
 def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
     """ 
-    Находит индекс строки (начиная с 2), перед которой должна быть вставлена новая заявка, 
-    чтобы сохранить хронологический порядок по колонке ДАТА_ДОСТАВКИ.
+    Находит индекс строки для вставки, чтобы сохранить хронологический порядок по ДАТЕ_ДОСТАВКИ.
     """
     if not orders_ws: return 2
     try:
-        # Загружаем колонку ДАТА_ДОСТАВКИ, начиная со второй строки (после заголовков)
         data_col = orders_ws.col_values(DELIVERY_DATE_COLUMN_INDEX)[1:]
     except Exception:
         return 2
     if not data_col: return 2
     try:
-        # Дата доставки новой заявки
         new_date = datetime.strptime(new_delivery_date_str, PARSE_DATETIME_FORMAT)
     except ValueError:
         return 2
 
 
-    # Ищем, где должна быть вставлена новая заявка
     for i, date_str in enumerate(data_col):
         try:
-            # Парсим существующую дату доставки
             existing_date = datetime.strptime(date_str, PARSE_DATETIME_FORMAT)
-            # Если новая дата доставки РАНЬШЕ или равна существующей,
-            # значит, вставлять нужно ПЕРЕД этой существующей строкой.
+            # Если новая дата РАНЬШЕ или равна существующей, вставляем ПЕРЕД
             if new_date <= existing_date: 
-                return i + 2 # +2: i - индекс (начиная с 0) +1 (пропуск заголовка) +1 (gspread индекс)
+                return i + 2
         except ValueError:
-            # Игнорируем строки с неверным форматом даты
             continue
             
-    # Если новая дата доставки ПОЗДНЕЕ всех существующих, вставляем в самый конец
+    # Если позже всех, вставляем в конец
     return len(data_col) + 2
 
 
 def save_order_data(data_row: List[Any], orders_ws) -> bool:
     """ 
-    Сохраняет новую заявку, вставляя ее в хронологическом порядке по ДАТЕ ДОСТАВКИ.
+    Сохраняет новую заявку, вставляя ее в хронологическом порядке.
     """
     if not orders_ws: return False
     try:
-        # Дата доставки находится в 5-м элементе data_row (индекс 4)
         new_delivery_date_str = data_row[4] 
-        # 1. Находим индекс строки для вставки по ДАТЕ ДОСТАВКИ
         insert_index = get_insert_index(new_delivery_date_str, orders_ws)
-        # 2. Вставляем строку (insert_row для вставки в середину)
         orders_ws.insert_row(data_row, index=insert_index)
-        # Принудительно очищаем кэш заявок
         load_all_orders.clear()
         return True
     except Exception as e:
@@ -240,7 +234,7 @@ def save_order_data(data_row: List[Any], orders_ws) -> bool:
 
 
 def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
-    """Обновляет существующую заявку, перезаписывая ее."""
+    """Обновляет существующую заявку."""
     if not orders_ws: return False
     try:
         col_values = orders_ws.col_values(2)
@@ -253,7 +247,6 @@ def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool
             st.error(f"Заявка с номером {order_number} не найдена в таблице.")
             return False
             
-        # Обновляем диапазон в найденной строке
         orders_ws.update(f'A{target_gspread_row_index}:H{target_gspread_row_index}', [data_row])
         load_all_orders.clear()
         return True
@@ -270,7 +263,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     text += f"🗓️ *Дата и Время Доставки:* {order_data['ДАТА_ДОСТАВКИ']}\n"
     if order_data.get('КОММЕНТАРИЙ'):
         text += f"📝 *Комментарий к заказу (общий):* {order_data['КОММЕНТАРИЙ']}\n"
-    text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n" # ЗАКАЗ включает комментарии позиций
+    text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n"
     text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n\n"
     text += "Пожалуйста, подтвердите заказ или укажите необходимые изменения."
     
@@ -288,7 +281,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
 # ОСНОВНАЯ ЛОГИКА ПРИЛОЖЕНИЯ
 # =========================================================
 def main():
-    # Инициализация состояния
+    # Инициализация основного состояния
     if 'app_mode' not in st.session_state: st.session_state.app_mode = 'new'
     if 'calculator_items' not in st.session_state: st.session_state.calculator_items = []
     if 'k_order_number' not in st.session_state: st.session_state.k_order_number = ""
@@ -297,12 +290,12 @@ def main():
     if 'k_comment' not in st.session_state: st.session_state.k_comment = ""
     if 'k_delivery_date' not in st.session_state: st.session_state.k_delivery_date = get_default_delivery_date()
     if 'k_delivery_time' not in st.session_state: st.session_state.k_delivery_time = get_default_delivery_time()
-    
-    # Инициализация поля количества (по умолчанию 1)
-    if 'new_item_qty_input' not in st.session_state: st.session_state.new_item_qty_input = 1
-    # Инициализация поля комментария (по умолчанию "")
-    if 'new_item_comment_input' not in st.session_state: st.session_state.new_item_comment_input = ""
     if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
+
+
+    # Инициализация полей для добавления товара (НУЖНО ДЛЯ КОРРЕКТНОГО СБРОСА!)
+    if 'new_item_qty_input' not in st.session_state: st.session_state.new_item_qty_input = 1
+    if 'new_item_comment_input' not in st.session_state: st.session_state.new_item_comment_input = ""
 
 
     # Загрузка данных
@@ -438,9 +431,9 @@ def main():
         
         with col4:
             st.time_input(
-                "Время Доставки (интервал 30 мин)", # Обновлено описание
+                "Время Доставки (интервал 30 мин)",
                 value=st.session_state.k_delivery_time, 
-                step=TIME_STEP_SECONDS, # Использует 1800 секунд
+                step=TIME_STEP_SECONDS,
                 key='k_delivery_time'
             )
             
@@ -460,7 +453,7 @@ def main():
 
 
         # =========================================================
-        # КАЛЬКУЛЯТОР ЗАКАЗА (ОБНОВЛЕННЫЙ С КОММЕНТАРИЕМ К ПОЗИЦИИ)
+        # КАЛЬКУЛЯТОР ЗАКАЗА
         # =========================================================
         st.subheader("Состав Заказа (Калькулятор)")
         
@@ -472,11 +465,12 @@ def main():
                 "Кол-во", 
                 min_value=1, 
                 step=1, 
+                # !!! Важно: используем значение из состояния
                 value=st.session_state.new_item_qty_input, 
                 key='new_item_qty_input'
             )
         
-        # НОВОЕ ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
+        # ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
         col_comment, col_add = st.columns([5, 1])
         with col_comment:
             st.text_input(
@@ -504,13 +498,21 @@ def main():
                             'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input
                         })
                         
-                        # >>> ИСПРАВЛЕНИЕ: Сброс количества до 1 и комментария после добавления
+                        # >>> НОВЫЙ БЕЗОПАСНЫЙ СБРОС (для избежания StreamlitAPIException):
+                        
+                        # 1. Сбрасываем значение в состоянии
                         st.session_state.new_item_qty_input = 1
                         st.session_state.new_item_comment_input = "" 
-                        # <<< КОНЕЦ ИСПРАВЛЕНИЯ
-
-
+                        
+                        # 2. Удаляем ключи, чтобы заставить Streamlit перестроить виджеты 
+                        #    с новым (сброшенным) значением при rerun.
+                        for key in ['new_item_qty_input', 'new_item_comment_input']:
+                            if key in st.session_state:
+                                del st.session_state[key]
+                        
+                        # 3. Перезапускаем
                         st.rerun()
+                        # <<< КОНЕЦ НОВОГО СБРОСА
 
 
         # Отображение товаров
