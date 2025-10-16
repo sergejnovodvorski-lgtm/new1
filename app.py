@@ -130,17 +130,17 @@ def get_default_delivery_time():
 # =========================================================
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Логика приложения)
 # =========================================================
-def reset_form_fields():
-    """
-    БЕЗОПАСНЫЙ СБРОС: Сбрасывает все поля формы
-    """
-    st.session_state.k_order_number = ""
-    st.session_state.k_client_phone = ""
-    st.session_state.k_address = ""
-    st.session_state.k_comment = ""
-    st.session_state.k_delivery_date = get_default_delivery_date()
-    st.session_state.k_delivery_time = get_default_delivery_time()
-    st.session_state.calculator_items = []
+def generate_next_order_number():
+    """Генерирует следующий номер заявки"""
+    try:
+        df = load_all_orders()
+        if not df.empty and 'НОМЕР_ЗАЯВКИ' in df.columns:
+            order_numbers = [int(n) for n in df['НОМЕР_ЗАЯВКИ'] if str(n).isdigit()]
+            return str(max(order_numbers) + 1) if order_numbers else "1001"
+        else:
+            return "1001"
+    except:
+        return "1001"
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
@@ -255,15 +255,24 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
 # =========================================================
 def main():
     # Инициализация основного состояния
-    if 'app_mode' not in st.session_state: st.session_state.app_mode = 'new'
-    if 'calculator_items' not in st.session_state: st.session_state.calculator_items = []
-    if 'k_order_number' not in st.session_state: st.session_state.k_order_number = ""
-    if 'k_client_phone' not in st.session_state: st.session_state.k_client_phone = ""
-    if 'k_address' not in st.session_state: st.session_state.k_address = ""
-    if 'k_comment' not in st.session_state: st.session_state.k_comment = ""
-    if 'k_delivery_date' not in st.session_state: st.session_state.k_delivery_date = get_default_delivery_date()
-    if 'k_delivery_time' not in st.session_state: st.session_state.k_delivery_time = get_default_delivery_time()
-    if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
+    if 'app_mode' not in st.session_state: 
+        st.session_state.app_mode = 'new'
+    if 'calculator_items' not in st.session_state: 
+        st.session_state.calculator_items = []
+    if 'last_success_message' not in st.session_state: 
+        st.session_state.last_success_message = None
+    if 'form_reset_trigger' not in st.session_state:
+        st.session_state.form_reset_trigger = False
+
+
+    # Обработка сброса формы
+    if st.session_state.form_reset_trigger:
+        st.session_state.form_reset_trigger = False
+        # Устанавливаем значения по умолчанию для новой формы
+        st.session_state.app_mode = 'new'
+        st.session_state.calculator_items = []
+        st.session_state.last_success_message = None
+        st.rerun()
 
 
     # Загрузка данных
@@ -303,11 +312,11 @@ def main():
         # Логика переключения режимов
         if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
             st.session_state.app_mode = 'new'
-            reset_form_fields()
+            st.session_state.calculator_items = []
             st.rerun()
         elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
             st.session_state.app_mode = 'edit'
-            reset_form_fields()
+            st.session_state.calculator_items = []
             st.rerun()
             
         st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
@@ -326,22 +335,29 @@ def main():
                         target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == search_number]
                         if not target_rows.empty:
                             row = target_rows.iloc[-1].to_dict()
-                            st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
-                            st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
-                            st.session_state.k_address = str(row.get('АДРЕС', ''))
-                            st.session_state.k_comment = str(row.get('КОММЕНТАРИЙ', ''))
+                            # Используем временные переменные вместо прямого изменения session_state
+                            order_data = {
+                                'k_order_number': str(row.get('НОМЕР_ЗАЯВКИ', '')),
+                                'k_client_phone': str(row.get('ТЕЛЕФОН', '')),
+                                'k_address': str(row.get('АДРЕС', '')),
+                                'k_comment': str(row.get('КОММЕНТАРИЙ', '')),
+                                'calculator_items': parse_order_text_to_items(str(row.get('ЗАКАЗ', '')))
+                            }
+                            
+                            # Обработка даты доставки
                             delivery_dt_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
                             try:
                                 dt_obj = datetime.strptime(delivery_dt_str, PARSE_DATETIME_FORMAT)
-                                st.session_state.k_delivery_date = dt_obj.date()
-                                st.session_state.k_delivery_time = dt_obj.time()
+                                delivery_date = dt_obj.date()
+                                delivery_time = dt_obj.time()
                             except (ValueError, TypeError):
-                                st.session_state.k_delivery_date = get_default_delivery_date()
-                                st.session_state.k_delivery_time = get_default_delivery_time()
-                            order_text = str(row.get('ЗАКАЗ', ''))
-                            st.session_state.calculator_items = parse_order_text_to_items(order_text)
+                                delivery_date = get_default_delivery_date()
+                                delivery_time = get_default_delivery_time()
+                                
                             st.success(f"✅ Заявка №{search_number} загружена для редактирования.")
-                            st.rerun()
+                            
+                            # Отображаем форму с загруженными данными
+                            st.session_state.calculator_items = order_data['calculator_items']
                         else:
                             st.error(f"❌ Заявка с номером {search_number} не найдена")
                     except Exception as e:
@@ -352,74 +368,61 @@ def main():
 
 
         # =========================================================
-        # ОСНОВНАЯ ФОРМА
+        # ОСНОВНАЯ ФОРМА (ИСПРАВЛЕННАЯ ВЕРСИЯ)
         # =========================================================
         st.subheader("Основные Данные Заявки")
         col1, col2 = st.columns(2)
         col3, col4 = st.columns(2)
 
 
+        # Определяем начальные значения для полей формы
+        if st.session_state.app_mode == 'new':
+            default_order_number = generate_next_order_number()
+        else:
+            # В режиме редактирования используем данные из поиска или оставляем пустыми
+            default_order_number = ""
+
+
         with col1:
             if st.session_state.app_mode == 'new':
-                # Логика автогенерации номера для новой заявки
-                if not st.session_state.k_order_number or st.session_state.k_order_number == "":
-                    try:
-                        df = load_all_orders()
-                        if not df.empty and 'НОМЕР_ЗАЯВКИ' in df.columns:
-                            order_numbers = [int(n) for n in df['НОМЕР_ЗАЯВКИ'] if str(n).isdigit()]
-                            next_number = max(order_numbers) + 1 if order_numbers else 1001
-                            st.session_state.k_order_number = str(next_number)
-                        else:
-                            st.session_state.k_order_number = "1001"
-                    except:
-                        st.session_state.k_order_number = "1001"
-                st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True, key='display_order_number')
+                order_number = st.text_input("Номер Заявки", value=default_order_number, disabled=True, key='display_order_number')
             else:
-                st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True, key='display_order_number_edit')
+                order_number = st.text_input("Номер Заявки", value=default_order_number, key='order_number_edit')
         
         with col2:
-            st.text_input(
-                "Телефон Клиента (с 7)", 
-                value=st.session_state.k_client_phone, 
-                key='k_client_phone'
-            )
+            client_phone = st.text_input("Телефон Клиента (с 7)", key='client_phone')
 
 
         # --- Поля для даты и времени ---
         with col3:
-            st.date_input(
+            delivery_date = st.date_input(
                 "Дата Доставки", 
-                value=st.session_state.k_delivery_date, 
+                value=get_default_delivery_date(), 
                 min_value=datetime.today().date(), 
-                key='k_delivery_date', 
+                key='delivery_date', 
                 format="DD.MM.YYYY"
             )
         
         with col4:
-            st.time_input(
+            delivery_time = st.time_input(
                 "Время Доставки (интервал 30 мин)",
-                value=st.session_state.k_delivery_time, 
+                value=get_default_delivery_time(), 
                 step=TIME_STEP_SECONDS,
-                key='k_delivery_time'
+                key='delivery_time'
             )
             
         # --- Поле адреса и комментария ---
-        st.text_input(
-            "Адрес Доставки", 
-            value=st.session_state.k_address, 
-            key='k_address'
-        )
-        st.text_area(
+        address = st.text_input("Адрес Доставки", key='address')
+        comment = st.text_area(
             "Комментарий / Примечание к заказу (общий)", 
-            value=st.session_state.k_comment, 
             height=50, 
-            key='k_comment'
+            key='comment'
         )
         st.markdown("---")
 
 
         # =========================================================
-        # КАЛЬКУЛЯТОР ЗАКАЗА (ИСПРАВЛЕННАЯ ВЕРСИЯ)
+        # КАЛЬКУЛЯТОР ЗАКАЗА
         # =========================================================
         st.subheader("Состав Заказа (Калькулятор)")
         
@@ -435,8 +438,8 @@ def main():
                 "Кол-во", 
                 min_value=1, 
                 step=1, 
-                value=1,  # Всегда начинаем с 1
-                key='new_item_qty_input'
+                value=1,
+                key='item_qty'
             )
         
         # ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
@@ -444,31 +447,30 @@ def main():
         with col_comment:
             current_comment = st.text_input(
                 "Комментарий к позиции",
-                value="",  # Всегда начинаем с пустой строки
-                key='new_item_comment_input'
+                value="",
+                key='item_comment'
             )
         
         with col_add:
             st.markdown(" ") 
-            add_clicked = st.button(
+            if st.button(
                 "➕ Добавить", 
                 use_container_width=True, 
                 disabled=selected_item == price_items[0],
                 key='add_item_button'
-            )
-            
-            if add_clicked and selected_item != price_items[0]:
-                price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
-                if not price_row.empty:
-                    price = float(price_row.iloc[0]['ЦЕНА'])
-                    st.session_state.calculator_items.append({
-                        'НАИМЕНОВАНИЕ': selected_item,
-                        'КОЛИЧЕСТВО': current_qty,
-                        'ЦЕНА_ЗА_ЕД': price,
-                        'СУММА': price * current_qty,
-                        'КОММЕНТАРИЙ_ПОЗИЦИИ': current_comment
-                    })
-                    st.rerun()
+            ):
+                if selected_item != price_items[0]:
+                    price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
+                    if not price_row.empty:
+                        price = float(price_row.iloc[0]['ЦЕНА'])
+                        st.session_state.calculator_items.append({
+                            'НАИМЕНОВАНИЕ': selected_item,
+                            'КОЛИЧЕСТВО': current_qty,
+                            'ЦЕНА_ЗА_ЕД': price,
+                            'СУММА': price * current_qty,
+                            'КОММЕНТАРИЙ_ПОЗИЦИИ': current_comment
+                        })
+                        st.rerun()
 
 
         # Отображение товаров
@@ -521,21 +523,25 @@ def main():
         # СОХРАНЕНИЕ ДАННЫХ
         # =========================================================
         st.subheader("Завершение Заявки")
-        valid_phone = is_valid_phone(st.session_state.k_client_phone)
+        
+        # Проверяем валидность телефона
+        valid_phone = is_valid_phone(client_phone)
+        
+        # Проверяем готовность к отправке
         is_ready_to_send = (
-            st.session_state.k_order_number and 
+            order_number and 
             valid_phone and 
-            st.session_state.k_address and 
+            address and 
             st.session_state.calculator_items
         )
 
 
         if not is_ready_to_send:
             missing_fields = []
-            if not st.session_state.k_order_number: missing_fields.append("Номер Заявки")
-            if not st.session_state.k_client_phone: missing_fields.append("Телефон Клиента")
+            if not order_number: missing_fields.append("Номер Заявки")
+            if not client_phone: missing_fields.append("Телефон Клиента")
             elif not valid_phone: missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
-            if not st.session_state.k_address: missing_fields.append("Адрес Доставки")
+            if not address: missing_fields.append("Адрес Доставки")
             if not st.session_state.calculator_items: missing_fields.append("Состав Заказа")
             
             if missing_fields:
@@ -556,17 +562,17 @@ def main():
         entry_datetime = datetime.now()
         entry_datetime_str = entry_datetime.strftime(SHEET_DATETIME_FORMAT)
         
-        delivery_datetime = datetime.combine(st.session_state.k_delivery_date, st.session_state.k_delivery_time)
+        delivery_datetime = datetime.combine(delivery_date, delivery_time)
         delivery_datetime_str = delivery_datetime.strftime(SHEET_DATETIME_FORMAT)
 
 
         data_to_save = [
             entry_datetime_str,                         # 0. ДАТА_ВВОДА
-            st.session_state.k_order_number,            # 1. НОМЕР_ЗАЯВКИ
+            order_number,                               # 1. НОМЕР_ЗАЯВКИ
             valid_phone,                                # 2. ТЕЛЕФОН
-            st.session_state.k_address,                 # 3. АДРЕС
+            address,                                    # 3. АДРЕС
             delivery_datetime_str,                      # 4. ДАТА_ДОСТАВКИ (используется для сортировки)
-            st.session_state.k_comment,                 # 5. КОММЕНТАРИЙ (Общий к заказу)
+            comment,                                    # 5. КОММЕНТАРИЙ (Общий к заказу)
             order_details,                              # 6. ЗАКАЗ (Включает комментарии позиций)
             float(total_sum) if not math.isnan(total_sum) else 0.0 # 7. СУММА
         ]
@@ -578,29 +584,28 @@ def main():
             if st.session_state.app_mode == 'new':
                 if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='save_new_order'):
                     if save_order_data(data_to_save, orders_ws):
-                        st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!"
-                        reset_form_fields()
-                        st.rerun()
+                        st.session_state.last_success_message = f"🎉 Заявка №{order_number} успешно сохранена!"
+                        st.session_state.form_reset_trigger = True
             else:
                 if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='update_order'):
-                    if update_order_data(st.session_state.k_order_number, data_to_save, orders_ws):
-                        st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!"
+                    if update_order_data(order_number, data_to_save, orders_ws):
+                        st.session_state.last_success_message = f"🎉 Заявка №{order_number} успешно перезаписана!"
                         st.rerun()
         
         with col_save2:
             if st.button("🔄 Очистить форму", use_container_width=True, key='clear_form'):
-                reset_form_fields()
+                st.session_state.form_reset_trigger = True
                 st.rerun()
 
 
         # Ссылка WhatsApp
         if is_ready_to_send:
             whatsapp_data = {
-                'НОМЕР_ЗАЯВКИ': st.session_state.k_order_number,
-                'ТЕЛЕФОН': st.session_state.k_client_phone,
-                'АДРЕС': st.session_state.k_address,
+                'НОМЕР_ЗАЯВКИ': order_number,
+                'ТЕЛЕФОН': client_phone,
+                'АДРЕС': address,
                 'ДАТА_ДОСТАВКИ': delivery_datetime.strftime('%d.%m.%Y %H:%M'),
-                'КОММЕНТАРИЙ': st.session_state.k_comment, 
+                'КОММЕНТАРИЙ': comment, 
                 'ЗАКАЗ': order_details 
             }
             final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
