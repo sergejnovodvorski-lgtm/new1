@@ -139,7 +139,10 @@ def get_default_delivery_time():
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Логика приложения)
 # =========================================================
 def reset_form_fields():
-    """Полностью сбрасывает все поля формы до начальных значений."""
+    """
+    Полностью сбрасывает все поля формы до начальных значений. 
+    Используется только удаление ключей для сброса виджетов.
+    """
     st.session_state.k_order_number = ""
     st.session_state.k_client_phone = ""
     st.session_state.k_address = ""
@@ -149,14 +152,14 @@ def reset_form_fields():
     st.session_state.calculator_items = []
     
     # Сброс полей ввода товара (безопасное удаление ключа)
+    # Это позволяет избежать StreamlitAPIException при on_click
     for key in ['new_item_qty_input', 'new_item_comment_input']:
         if key in st.session_state:
             del st.session_state[key]
-    
-    # После удаления, необходимо переинициализировать их для следующего цикла main()
-    # (Это переопределяется в main, но для ясности оставим здесь)
-    st.session_state.new_item_qty_input = 1
-    st.session_state.new_item_comment_input = ""
+            
+    # ВАЖНО: УДАЛЕНЫ СТРОКИ, КОТОРЫЕ ВЫЗЫВАЛИ ОШИБКУ:
+    # st.session_state.new_item_qty_input = 1
+    # st.session_state.new_item_comment_input = ""
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
@@ -194,6 +197,7 @@ def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
     """
     if not orders_ws: return 2
     try:
+        # Загружаем только столбец с датами доставки, пропуская заголовок (индекс 1)
         data_col = orders_ws.col_values(DELIVERY_DATE_COLUMN_INDEX)[1:]
     except Exception:
         return 2
@@ -209,7 +213,7 @@ def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
             existing_date = datetime.strptime(date_str, PARSE_DATETIME_FORMAT)
             # Если новая дата РАНЬШЕ или равна существующей, вставляем ПЕРЕД
             if new_date <= existing_date: 
-                return i + 2
+                return i + 2 # +2, потому что i начинается с 0, а заголовок занимает строку 1
         except ValueError:
             continue
             
@@ -223,9 +227,11 @@ def save_order_data(data_row: List[Any], orders_ws) -> bool:
     """
     if not orders_ws: return False
     try:
+        # Дата доставки находится в data_row[4]
         new_delivery_date_str = data_row[4] 
         insert_index = get_insert_index(new_delivery_date_str, orders_ws)
         orders_ws.insert_row(data_row, index=insert_index)
+        # Сброс кэша для актуализации списка заявок на вкладке "Список Заявок"
         load_all_orders.clear()
         return True
     except Exception as e:
@@ -237,6 +243,7 @@ def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool
     """Обновляет существующую заявку."""
     if not orders_ws: return False
     try:
+        # Ищем строку по номеру заявки во 2-м столбце (B)
         col_values = orders_ws.col_values(2)
         target_gspread_row_index = -1
         for i in range(len(col_values) - 1, 0, -1):
@@ -293,7 +300,7 @@ def main():
     if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
 
 
-    # Инициализация полей для добавления товара (НУЖНО ДЛЯ КОРРЕКТНОГО СБРОСА!)
+    # Инициализация полей для добавления товара (ВАЖНО: ИСПОЛЬЗУЕМ УСЛОВИЕ if not in)
     if 'new_item_qty_input' not in st.session_state: st.session_state.new_item_qty_input = 1
     if 'new_item_comment_input' not in st.session_state: st.session_state.new_item_comment_input = ""
 
@@ -498,21 +505,21 @@ def main():
                             'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input
                         })
                         
-                        # >>> НОВЫЙ БЕЗОПАСНЫЙ СБРОС (для избежания StreamlitAPIException):
+                        # >>> БЕЗОПАСНЫЙ СБРОС (Для избежания StreamlitAPIException):
                         
-                        # 1. Сбрасываем значение в состоянии
+                        # 1. Устанавливаем сброшенное значение (1 и "")
                         st.session_state.new_item_qty_input = 1
                         st.session_state.new_item_comment_input = "" 
                         
                         # 2. Удаляем ключи, чтобы заставить Streamlit перестроить виджеты 
-                        #    с новым (сброшенным) значением при rerun.
+                        #    с новым (сброшенным) значением при rerun. Это устраняет конфликт.
                         for key in ['new_item_qty_input', 'new_item_comment_input']:
                             if key in st.session_state:
                                 del st.session_state[key]
                         
                         # 3. Перезапускаем
                         st.rerun()
-                        # <<< КОНЕЦ НОВОГО СБРОСА
+                        # <<< КОНЕЦ БЕЗОПАСНОГО СБРОСА
 
 
         # Отображение товаров
@@ -623,6 +630,7 @@ def main():
 
         # Кнопка сохранения
         if st.session_state.app_mode == 'new':
+            # on_click=reset_form_fields запускает reset_form_fields ПЕРЕД основным кодом кнопки.
             if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, on_click=reset_form_fields):
                 if save_order_data(data_to_save, orders_ws):
                     st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!"
