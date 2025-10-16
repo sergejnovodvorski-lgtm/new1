@@ -132,7 +132,7 @@ def get_default_delivery_time():
 # =========================================================
 def reset_form_fields():
     """
-    УСИЛЕННЫЙ СБРОС: Сбрасывает все поля, используя ТОЛЬКО УДАЛЕНИЕ КЛЮЧЕЙ
+    БЕЗОПАСНЫЙ СБРОС: Сбрасывает все поля, используя ТОЛЬКО УДАЛЕНИЕ КЛЮЧЕЙ
     для полей виджетов, чтобы избежать StreamlitAPIException при on_click.
     """
     st.session_state.k_order_number = ""
@@ -143,8 +143,7 @@ def reset_form_fields():
     st.session_state.k_delivery_time = get_default_delivery_time()
     st.session_state.calculator_items = []
     
-    # !!! КРИТИЧЕСКИ ВАЖНОЕ МЕСТО !!!
-    # ТОЛЬКО УДАЛЯЕМ КЛЮЧИ. Присвоения здесь НЕДОПУСТИМЫ.
+    # КЛЮЧЕВОЕ МЕСТО: ТОЛЬКО УДАЛЕНИЕ КЛЮЧЕЙ ВИДЖЕТОВ, НИКАКИХ ПРИСВОЕНИЙ
     for key in ['new_item_qty_input', 'new_item_comment_input']:
         if key in st.session_state:
             del st.session_state[key]
@@ -272,9 +271,8 @@ def main():
     if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
 
 
-    # !!! КРИТИЧЕСКИ ВАЖНОЕ МЕСТО (Усиленная Инициализация) !!!
-    # Присвоение значений по умолчанию происходит ТОЛЬКО при первом запуске,
-    # когда ключей еще нет в session_state. ЭТО ИЗБЕЖИТ КОНФЛИКТА.
+    # !!! ГАРАНТИРОВАННАЯ ИНИЦИАЛИЗАЦИЯ (Решение проблемы StreamlitAPIException) !!!
+    # Присвоение происходит ТОЛЬКО при отсутствии ключа в session_state.
     if 'new_item_qty_input' not in st.session_state: 
         st.session_state.new_item_qty_input = 1
     if 'new_item_comment_input' not in st.session_state: 
@@ -442,7 +440,6 @@ def main():
         with col_item:
             selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty)
         with col_qty:
-            # !!! Виджет 1, связанный с проблемным ключом !!!
             st.number_input(
                 "Кол-во", 
                 min_value=1, 
@@ -454,7 +451,6 @@ def main():
         # ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
         col_comment, col_add = st.columns([5, 1])
         with col_comment:
-            # !!! Виджет 2, связанный с проблемным ключом !!!
             st.text_input(
                 "Комментарий к позиции",
                 value=st.session_state.new_item_comment_input,
@@ -480,14 +476,12 @@ def main():
                             'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input
                         })
                         
-                        # >>> УСИЛЕННЫЙ И БЕЗОПАСНЫЙ СБРОС (для исключения StreamlitAPIException):
-                        
-                        # 1. Сбрасываем значение (Это вызывает ошибку, но мы ее тут же исправляем)
+                        # >>> БЕЗОПАСНЫЙ СБРОС (ПАТТЕРН "ПРИСВОИТЬ-УДАЛИТЬ")
+                        # 1. Присваиваем сброшенное значение
                         st.session_state.new_item_qty_input = 1
                         st.session_state.new_item_comment_input = "" 
                         
-                        # 2. Удаляем ключи! Это заставляет Streamlit "забыть" о конфликте
-                        # и перерисовать виджеты с новыми (сброшенными) значениями при rerun.
+                        # 2. Удаляем ключи, чтобы Streamlit перерисовал виджеты с новым значением (1 и "")
                         for key in ['new_item_qty_input', 'new_item_comment_input']:
                             if key in st.session_state:
                                 del st.session_state[key]
