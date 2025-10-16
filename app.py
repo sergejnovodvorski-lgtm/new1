@@ -34,6 +34,7 @@ TIME_STEP_SECONDS = 1800
 SHEET_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
 DISPLAY_DATETIME_FORMAT = 'DD.MM.YYYY HH:mm'
 PARSE_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
+DISPLAY_DATE_FORMAT = '%d.%m.%Y %H:%M'  # Формат для отображения без секунд
 
 
 st.set_page_config(
@@ -248,6 +249,22 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
         target_phone_final = normalized_phone
         
     return f"https://wa.me/{target_phone_final}?text={encoded_text}"
+
+
+def format_datetime_for_display(dt_str):
+    """Форматирует дату-время для отображения"""
+    try:
+        # Пробуем распарсить в формате сохранения
+        dt = datetime.strptime(dt_str, PARSE_DATETIME_FORMAT)
+        return dt.strftime(DISPLAY_DATE_FORMAT)
+    except ValueError:
+        try:
+            # Пробуем альтернативный формат, если основной не сработал
+            dt = datetime.strptime(dt_str, '%d.%m.%Y %H:%M')
+            return dt.strftime(DISPLAY_DATE_FORMAT)
+        except ValueError:
+            # Если не удалось распарсить, возвращаем исходную строку
+            return dt_str
 
 
 # =========================================================
@@ -622,7 +639,7 @@ def main():
 
 
     # =========================================================
-    # ВКЛАДКА 2: СПИСОК ЗАЯВОК (ХРОНОЛОГИЧЕСКИЙ ПОРЯДОК)
+    # ВКЛАДКА 2: СПИСОК ЗАЯВОК (ИСПРАВЛЕННАЯ ВЕРСИЯ)
     # =========================================================
     with tab_order_list:
         st.header("📋 Просмотр и Поиск Заявок")
@@ -633,10 +650,22 @@ def main():
             st.warning("Лист 'ЗАЯВКИ' пуст или произошла ошибка при загрузке.")
         else:
             df_display = all_orders_df.copy()
+            
+            # Преобразуем номера заявок в строки
             df_display['НОМЕР_ЗАЯВКИ'] = df_display['НОМЕР_ЗАЯВКИ'].astype(str)
+            
+            # Обрабатываем суммы
             df_display['СУММА'] = pd.to_numeric(df_display['СУММА'], errors='coerce').fillna(0)
             
-            df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display['ДАТА_ДОСТАВКИ'], format=PARSE_DATETIME_FORMAT, errors='coerce')
+            # Форматируем даты для отображения
+            df_display['ДАТА_ВВОДА_ОТОБРАЖЕНИЕ'] = df_display['ДАТА_ВВОДА'].apply(format_datetime_for_display)
+            df_display['ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ'] = df_display['ДАТА_ДОСТАВКИ'].apply(format_datetime_for_display)
+            
+            # Создаем datetime столбцы для сортировки
+            try:
+                df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display['ДАТА_ДОСТАВКИ'], format=PARSE_DATETIME_FORMAT, errors='coerce')
+            except:
+                df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display['ДАТА_ДОСТАВКИ'], errors='coerce')
             
             # 2. Поиск и фильтрация
             st.subheader("Поиск")
@@ -644,24 +673,29 @@ def main():
             if search_term:
                 search_lower = search_term.lower()
                 df_display = df_display[
-                    df_display['НОМЕР_ЗАЯВКИ'].str.contains(search_lower) | 
-                    df_display['ТЕЛЕФОН'].astype(str).str.contains(search_lower) | 
-                    df_display['АДРЕС'].astype(str).str.contains(search_lower, case=False)
+                    df_display['НОМЕР_ЗАЯВКИ'].str.contains(search_lower, na=False) | 
+                    df_display['ТЕЛЕФОН'].astype(str).str.contains(search_lower, na=False) | 
+                    df_display['АДРЕС'].astype(str).str.contains(search_lower, case=False, na=False)
                 ]
             st.info(f"Отображается заявок: **{len(df_display)}**")
 
 
-            # 3. Визуально красивый вывод
+            # 3. Визуально красивый вывод с исправленными датами
+            display_columns = [
+                'ДАТА_ВВОДА_ОТОБРАЖЕНИЕ', 'НОМЕР_ЗАЯВКИ', 'ТЕЛЕФОН', 'АДРЕС', 
+                'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ', 'СУММА'
+            ]
+            
             st.dataframe(
-                df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT', ascending=True).drop(columns=['ДАТА_ДОСТАВКИ_DT']),
+                df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT', ascending=True)[display_columns],
                 column_config={
-                    "ДАТА_ВВОДА": st.column_config.DatetimeColumn("Введено", format=DISPLAY_DATETIME_FORMAT),
-                    "ДАТА_ДОСТАВКИ": st.column_config.DatetimeColumn("🗓️ Доставка", format=DISPLAY_DATETIME_FORMAT),
+                    "ДАТА_ВВОДА_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("Введено"),
+                    "ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("🗓️ Доставка"),
                     "НОМЕР_ЗАЯВКИ": "№ Заявки",
-                    "ТЕЛЕФОН": st.column_config.Column("📞 Телефон"),
-                    "АДРЕС": st.column_config.Column("📍 Адрес", help="Адрес доставки"),
+                    "ТЕЛЕФОН": st.column_config.TextColumn("📞 Телефон"),
+                    "АДРЕС": st.column_config.TextColumn("📍 Адрес", help="Адрес доставки"),
                     "КОММЕНТАРИЙ": "📝 Комментарий (Общий)",
-                    "ЗАКАЗ": st.column_config.Column("🛒 Состав Заказа", help="Детали заказа и комментарии позиций"),
+                    "ЗАКАЗ": st.column_config.TextColumn("🛒 Состав Заказа", help="Детали заказа и комментарии позиций"),
                     "СУММА": st.column_config.NumberColumn("💰 Сумма", format="%.2f РУБ.", help="Общая сумма заказа"),
                 },
                 hide_index=True,
