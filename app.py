@@ -69,11 +69,6 @@ def clear_form_state():
     
     # Полный сброс состояния
     keys_to_keep = ['app_mode', 'mode_selector_value', 'critical_error']
-    
-    # В режиме редактирования сохраняем target_row_index до момента сохранения
-    if current_mode == 'edit' and st.session_state.get('k_target_row_index'):
-        keys_to_keep.append('k_target_row_index')
-    
     new_state = {key: st.session_state.get(key) for key in keys_to_keep}
     st.session_state.clear()
     st.session_state.update(new_state)
@@ -89,6 +84,7 @@ def clear_form_state():
         st.session_state.k_order_number = ""
     
     st.session_state.k_delivery_date = get_default_delivery_date()
+    st.session_state.k_target_row_index = None
     
     # Инициализируем поля ввода
     st.session_state.k_client_phone = ""
@@ -568,7 +564,15 @@ def handle_save_and_clear(data_to_save: List[Any], is_update: bool):
     if save_data_to_gsheets(data_to_save):
         success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно {'перезаписана' if is_update else 'сохранена'}!"
         st.session_state.last_success_message = success_message
-        st.session_state.do_clear_form = True
+        
+        # В режиме редактирования НЕ очищаем форму полностью
+        if is_update:
+            # Просто показываем сообщение об успехе, но сохраняем target_row_index
+            st.success(success_message)
+            # Не устанавливаем do_clear_form = True, чтобы форма не очищалась
+        else:
+            # В режиме новой заявки очищаем форму
+            st.session_state.do_clear_form = True
 
 
 # =========================================================
