@@ -478,43 +478,44 @@ def parse_conversation(text: str):
     st.rerun()
 
 
-def save_data_to_gsheets(data_row: List[Any]) -> bool:
+def save_data_to_gsheets(data_row: List[Any], row_index: int) -> bool:
     """Сохраняет или обновляет данные в Google Sheets."""
     if orders_ws is None:
         st.error("Не удалось подключиться к листу для записи данных.")
         return False
     
-    row_index = st.session_state.k_target_row_index
-    
-    with st.spinner(f"⏳ {'Обновление' if row_index else 'Сохранение'} заявки..."):
-        try:
-            if row_index and isinstance(row_index, int) and row_index > 1:
-                # ОБНОВЛЕНИЕ существующей строки
-                orders_ws.update(f'A{row_index}:H{row_index}', [data_row])
-                return True
-            else:
-                # ДОБАВЛЕНИЕ новой строки
-                orders_ws.append_row(data_row)
-                return True
-                
-        except Exception as e:
-            st.error(f"Ошибка записи в Google Sheets: {e}")
-            return False
+    try:
+        if row_index and isinstance(row_index, int) and row_index > 1:
+            # ОБНОВЛЕНИЕ существующей строки - КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+            # Обновляем каждую ячейку отдельно для надежности
+            for col, value in enumerate(data_row, start=1):
+                orders_ws.update_cell(row_index, col, value)
+            return True
+        else:
+            # ДОБАВЛЕНИЕ новой строки
+            orders_ws.append_row(data_row)
+            return True
+            
+    except Exception as e:
+        st.error(f"Ошибка записи в Google Sheets: {e}")
+        return False
 
 
 def handle_save_and_clear(data_to_save: List[Any], is_update: bool):
     """Обработчик сохранения данных."""
-    if save_data_to_gsheets(data_to_save):
-        success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно {'перезаписана' if is_update else 'сохранена'}!"
-        st.session_state.last_success_message = success_message
-        
-        # В режиме редактирования НЕ очищаем форму полностью
-        if is_update:
-            st.success(success_message)
-            # Сохраняем target_row_index для возможных дальнейших изменений
-        else:
-            # В режиме новой заявки очищаем форму
-            st.session_state.do_clear_form = True
+    row_index = st.session_state.k_target_row_index
+    
+    with st.spinner(f"⏳ {'Обновление' if is_update else 'Сохранение'} заявки..."):
+        if save_data_to_gsheets(data_to_save, row_index):
+            success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно {'перезаписана' if is_update else 'сохранена'}!"
+            
+            if is_update:
+                st.success(success_message)
+                # В режиме редактирования НЕ очищаем форму
+                # Сохраняем target_row_index для возможных дальнейших изменений
+            else:
+                st.session_state.last_success_message = success_message
+                st.session_state.do_clear_form = True
 
 
 # =========================================================
@@ -651,6 +652,11 @@ with col_btn:
     else:
         if st.button("🧼 Очистить Форму", type="secondary", use_container_width=True):
             st.session_state.do_clear_form = True
+
+
+# Отладочная информация
+if st.session_state.app_mode == 'edit':
+    st.info(f"Отладка: target_row_index = {st.session_state.k_target_row_index}")
 
 
 st.markdown("---")
