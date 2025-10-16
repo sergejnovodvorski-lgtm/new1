@@ -109,22 +109,31 @@ def get_default_delivery_date():
 
 
 def main():
-    # Инициализация состояния
-    if 'initialized' not in st.session_state:
-        st.session_state.initialized = True
+    # Инициализация состояния (СДЕЛАНО БОЛЕЕ НАДЕЖНО)
+    if 'app_mode' not in st.session_state:
         st.session_state.app_mode = 'new'
+    if 'calculator_items' not in st.session_state:
         st.session_state.calculator_items = []
+    if 'k_order_number' not in st.session_state:
         st.session_state.k_order_number = ""
+    if 'k_client_phone' not in st.session_state:
         st.session_state.k_client_phone = ""
+    if 'k_address' not in st.session_state:
         st.session_state.k_address = ""
+    if 'k_comment' not in st.session_state:
         st.session_state.k_comment = ""
+    if 'k_delivery_date' not in st.session_state:
         st.session_state.k_delivery_date = get_default_delivery_date()
+    # Ключ, вызывавший ошибку:
+    if 'new_item_qty' not in st.session_state:
         st.session_state.new_item_qty = 1
+    if 'conversation_text_input' not in st.session_state:
         st.session_state.conversation_text_input = ""
+    if 'parsing_log' not in st.session_state:
         st.session_state.parsing_log = ""
+    if 'last_success_message' not in st.session_state:
         st.session_state.last_success_message = None
-
-
+    
     # Загрузка данных
     price_df = load_price_list()
     orders_ws = get_orders_worksheet()
@@ -156,7 +165,6 @@ def main():
     )
 
 
-    # При смене режима сбрасываем данные
     if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
         st.session_state.app_mode = 'new'
         st.session_state.k_order_number = ""
@@ -194,7 +202,6 @@ def main():
                 try:
                     data = orders_ws.get_all_records()
                     df = pd.DataFrame(data)
-                    # Фильтруем по номеру заявки
                     target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == search_number]
                     
                     if not target_rows.empty:
@@ -211,7 +218,6 @@ def main():
                         # Дата доставки
                         delivery_date_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
                         try:
-                            # Убеждаемся, что дата в формате date (нужно для st.date_input)
                             date_obj = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
                             st.session_state.k_delivery_date = date_obj
                         except (ValueError, TypeError):
@@ -222,8 +228,7 @@ def main():
                         st.session_state.calculator_items = parse_order_text_to_items(order_text)
                         
                         st.success(f"✅ Заявка №{search_number} загружена для редактирования. Обновите данные и нажмите 'Перезаписать'.")
-                        # Перезапуск, чтобы виджеты обновили свои значения
-                        st.rerun() 
+                        st.rerun()
                     else:
                         st.error(f"❌ Заявка с номером {search_number} не найдена")
                 except Exception as e:
@@ -255,7 +260,6 @@ def main():
                         data = orders_ws.get_all_records()
                         df = pd.DataFrame(data)
                         if not df.empty and 'НОМЕР_ЗАЯВКИ' in df.columns:
-                            # Фильтруем и находим максимальный номер
                             order_numbers = [int(n) for n in df['НОМЕР_ЗАЯВКИ'] if str(n).isdigit()]
                             next_number = max(order_numbers) + 1 if order_numbers else 1001
                             st.session_state.k_order_number = str(next_number)
@@ -309,7 +313,7 @@ def main():
 
 
     # =========================================================
-    # КАЛЬКУЛЯТОР ЗАКАЗА
+    # КАЛЬКУЛЯТОР ЗАКАЗА (ИСПРАВЛЕННЫЙ number_input)
     # =========================================================
 
 
@@ -324,8 +328,16 @@ def main():
 
 
     with col_qty:
-        # Используем отдельный ключ для поля ввода количества
-        quantity = st.number_input("Кол-во", min_value=1, step=1, value=st.session_state.new_item_qty, key='new_item_qty')
+        # ИСПРАВЛЕНО: Используем 'new_item_qty_input' как ключ виджета.
+        # Используем st.session_state.new_item_qty как начальное значение.
+        # Значение, вводимое пользователем, будет сохранено в new_item_qty_input
+        quantity = st.number_input(
+            "Кол-во", 
+            min_value=1, 
+            step=1, 
+            value=st.session_state.new_item_qty, 
+            key='new_item_qty_input'
+        )
 
 
     with col_add:
@@ -337,12 +349,13 @@ def main():
                     price = float(price_row.iloc[0]['ЦЕНА'])
                     st.session_state.calculator_items.append({
                         'НАИМЕНОВАНИЕ': selected_item,
-                        'КОЛИЧЕСТВО': quantity,
+                        # Берем актуальное значение из ключа виджета
+                        'КОЛИЧЕСТВО': st.session_state.new_item_qty_input, 
                         'ЦЕНА_ЗА_ЕД': price,
-                        'СУММА': price * quantity
+                        'СУММА': price * st.session_state.new_item_qty_input
                     })
                     # Сброс количества на 1 для удобства
-                    st.session_state.new_item_qty = 1
+                    st.session_state.new_item_qty_input = 1
                     st.rerun()
 
 
@@ -492,7 +505,6 @@ def main():
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
     items = []
-    # Обновленный паттерн, чтобы лучше справляться с форматированием чисел
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
     
     for line in order_text.split('\n'):
@@ -500,7 +512,6 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
         if match:
             name = match.group(1).strip()
             qty = int(match.group(2))
-            # Удаляем пробелы и заменяем запятые на точки для корректного float
             price_str = match.group(3).replace(' ', '').replace(',', '.')
             try:
                 price_per_unit = float(price_str)
@@ -577,7 +588,6 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
         text += f"📝 *Комментарий:* {order_data['КОММЕНТАРИЙ']}\n"
     
     text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n"
-    # Используем запятую как разделитель тысяч
     text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n\n"
     text += "Пожалуйста, подтвердите заказ или укажите необходимые изменения."
     
