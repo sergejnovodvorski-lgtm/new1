@@ -26,18 +26,13 @@ EXPECTED_HEADERS = [
 ]
 # Индекс столбца для сортировки/вставки: ДАТА_ДОСТАВКИ (E)
 DELIVERY_DATE_COLUMN_INDEX = 5
-# ЗАМЕНИТЕ ЭТОТ НОМЕР НА НОМЕР МЕНЕДЖЕРА
 MANAGER_WHATSAPP_PHONE = "79000000000"
-# Интервал 30 минут в секундах
-TIME_STEP_SECONDS = 1800 # 30 * 60 = 1800
+TIME_STEP_SECONDS = 1800 
 
 
 # --- ФОРМАТЫ ДАТЫ ---
-# Формат для сохранения в Google Sheets (ДД.ММ.ГГГГ ЧЧ:ММ:СС)
 SHEET_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
-# Формат для отображения в Streamlit (ДД.ММ.ГГГГ ЧЧ:ММ)
 DISPLAY_DATETIME_FORMAT = 'DD.MM.YYYY HH:mm'
-# Формат для парсинга и сортировки
 PARSE_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
 
 
@@ -57,7 +52,6 @@ def get_gsheet_client():
         st.error("Секрет 'gcp_service_account' не найден. Проверьте конфигурацию secrets.toml.")
         return None
     try:
-        # Предполагается, что st.secrets["gcp_service_account"] содержит словарь учетных данных
         return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
     except Exception as e:
         st.error(f"Ошибка аутентификации: {e}")
@@ -74,7 +68,6 @@ def get_orders_worksheet():
         worksheet = sh.worksheet(WORKSHEET_NAME_ORDERS)
         current_headers = worksheet.row_values(1)
         if current_headers != EXPECTED_HEADERS:
-            # Обновление заголовков, если они не соответствуют ожидаемым
             worksheet.update('A1', [EXPECTED_HEADERS])
         return worksheet
     except Exception as e:
@@ -84,7 +77,6 @@ def get_orders_worksheet():
 
 @st.cache_data(ttl="1h")
 def load_all_orders():
-    """Загружает все заявки с листа 'ЗАЯВКИ'."""
     orders_ws = get_orders_worksheet()
     if not orders_ws:
         return pd.DataFrame()
@@ -140,8 +132,7 @@ def get_default_delivery_time():
 # =========================================================
 def reset_form_fields():
     """
-    Полностью сбрасывает все поля формы до начальных значений. 
-    УДАЛЯЕТ ключи виджетов, чтобы избежать StreamlitAPIException.
+    БЕЗОПАСНЫЙ СБРОС: Сбрасывает все поля формы
     """
     st.session_state.k_order_number = ""
     st.session_state.k_client_phone = ""
@@ -151,21 +142,19 @@ def reset_form_fields():
     st.session_state.k_delivery_time = get_default_delivery_time()
     st.session_state.calculator_items = []
     
-    # Сброс полей ввода товара: ТОЛЬКО УДАЛЕНИЕ КЛЮЧЕЙ. 
-    # В следующем цикле main() они будут переинициализированы с '1' и '""'
-    for key in ['new_item_qty_input', 'new_item_comment_input']:
-        if key in st.session_state:
-            del st.session_state[key]
-            
-    # ВАЖНО: Больше нет безусловных присвоений здесь!
-    # st.session_state.new_item_qty_input = 1 # УДАЛЕНО!
-    # st.session_state.new_item_comment_input = "" # УДАЛЕНО!
+def safe_reset_item_fields():
+    """
+    Безопасный сброс полей товара без вызова StreamlitAPIException
+    """
+    # Используем callback для безопасного сброса
+    if 'new_item_qty_input' in st.session_state:
+        st.session_state.new_item_qty_input = 1
+    if 'new_item_comment_input' in st.session_state:
+        st.session_state.new_item_comment_input = ""
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
-    """Парсит текст заказа обратно в список позиций с учетом комментария."""
     items = []
-    # Паттерн для разбора: (Товар) - (Кол-во) шт. (по (Цена) РУБ.) [| Комментарий]
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)(?:\s*\|\s*(.*))?')
     
     for line in order_text.split('\n'):
@@ -192,9 +181,6 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
 
 
 def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
-    """ 
-    Находит индекс строки для вставки, чтобы сохранить хронологический порядок по ДАТЕ_ДОСТАВКИ.
-    """
     if not orders_ws: return 2
     try:
         data_col = orders_ws.col_values(DELIVERY_DATE_COLUMN_INDEX)[1:]
@@ -210,20 +196,15 @@ def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
     for i, date_str in enumerate(data_col):
         try:
             existing_date = datetime.strptime(date_str, PARSE_DATETIME_FORMAT)
-            # Если новая дата РАНЬШЕ или равна существующей, вставляем ПЕРЕД
             if new_date <= existing_date: 
                 return i + 2
         except ValueError:
             continue
             
-    # Если позже всех, вставляем в конец
     return len(data_col) + 2
 
 
 def save_order_data(data_row: List[Any], orders_ws) -> bool:
-    """ 
-    Сохраняет новую заявку, вставляя ее в хронологическом порядке.
-    """
     if not orders_ws: return False
     try:
         new_delivery_date_str = data_row[4] 
@@ -237,7 +218,6 @@ def save_order_data(data_row: List[Any], orders_ws) -> bool:
 
 
 def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
-    """Обновляет существующую заявку."""
     if not orders_ws: return False
     try:
         col_values = orders_ws.col_values(2)
@@ -296,8 +276,7 @@ def main():
     if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
 
 
-    # Инициализация полей для добавления товара (Строки, которые конфликтовали)
-    # Используем СТРОГОЕ УСЛОВИЕ, чтобы избежать ошибки при повторном рендеринге
+    # Инициализация полей товаров с безопасным подходом
     if 'new_item_qty_input' not in st.session_state: 
         st.session_state.new_item_qty_input = 1
     if 'new_item_comment_input' not in st.session_state: 
@@ -342,10 +321,12 @@ def main():
         if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
             st.session_state.app_mode = 'new'
             reset_form_fields()
+            safe_reset_item_fields()
             st.rerun()
         elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
             st.session_state.app_mode = 'edit'
             reset_form_fields()
+            safe_reset_item_fields()
             st.rerun()
             
         st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
@@ -370,7 +351,6 @@ def main():
                             st.session_state.k_comment = str(row.get('КОММЕНТАРИЙ', ''))
                             delivery_dt_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
                             try:
-                                # Парсинг ДД.ММ.ГГГГ ЧЧ:ММ:СС
                                 dt_obj = datetime.strptime(delivery_dt_str, PARSE_DATETIME_FORMAT)
                                 st.session_state.k_delivery_date = dt_obj.date()
                                 st.session_state.k_delivery_time = dt_obj.time()
@@ -378,7 +358,6 @@ def main():
                                 st.session_state.k_delivery_date = get_default_delivery_date()
                                 st.session_state.k_delivery_time = get_default_delivery_time()
                             order_text = str(row.get('ЗАКАЗ', ''))
-                            # Используем обновленную функцию parse_order_text_to_items
                             st.session_state.calculator_items = parse_order_text_to_items(order_text)
                             st.success(f"✅ Заявка №{search_number} загружена для редактирования.")
                             st.rerun()
@@ -465,13 +444,12 @@ def main():
         
         col_item, col_qty = st.columns([5, 1])
         with col_item:
-            selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty)
+            selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty, key='item_selector')
         with col_qty:
             st.number_input(
                 "Кол-во", 
                 min_value=1, 
                 step=1, 
-                # Используем значение из состояния
                 value=st.session_state.new_item_qty_input, 
                 key='new_item_qty_input'
             )
@@ -486,11 +464,12 @@ def main():
             )
         
         with col_add:
-            st.markdown(" ") # Дополнительный отступ для выравнивания
+            st.markdown(" ") 
             if st.button(
                 "➕ Добавить", 
                 use_container_width=True, 
-                disabled=selected_item == price_items[0]
+                disabled=selected_item == price_items[0],
+                key='add_item_button'
             ):
                 if selected_item != price_items[0]:
                     price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
@@ -504,20 +483,9 @@ def main():
                             'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input
                         })
                         
-                        # >>> БЕЗОПАСНЫЙ СБРОС ДЛЯ WIDGETS (Предотвращает StreamlitAPIException):
-                        
-                        # 1. Присваиваем сброшенное значение (1 и "")
-                        st.session_state.new_item_qty_input = 1
-                        st.session_state.new_item_comment_input = "" 
-                        
-                        # 2. Удаляем ключи, чтобы Streamlit перестроил виджеты с новым значением
-                        for key in ['new_item_qty_input', 'new_item_comment_input']:
-                            if key in st.session_state:
-                                del st.session_state[key]
-                        
-                        # 3. Перезапускаем
+                        # Безопасный сброс полей товара
+                        safe_reset_item_fields()
                         st.rerun()
-                        # <<< КОНЕЦ БЕЗОПАСНОГО СБРОСА
 
 
         # Отображение товаров
@@ -526,7 +494,6 @@ def main():
             df_items = pd.DataFrame(st.session_state.calculator_items)
             total_sum = df_items['СУММА'].sum()
             
-            # Обновленное отображение DataFrame, включая Комментарий
             st.dataframe(
                 df_items[['НАИМЕНОВАНИЕ', 'КОЛИЧЕСТВО', 'ЦЕНА_ЗА_ЕД', 'КОММЕНТАРИЙ_ПОЗИЦИИ', 'СУММА']],
                 column_config={
@@ -594,9 +561,7 @@ def main():
 
         # Подготовка данных (Форматирование заказа с комментарием позиции)
         def format_order_item(item):
-            # Базовый формат: Товар - X шт. (по Y РУБ.)
             base = f"{item['НАИМЕНОВАНИЕ']} - {item['КОЛИЧЕСТВО']} шт. (по {item['ЦЕНА_ЗА_ЕД']:,.2f} РУБ.)"
-            # Если есть комментарий к позиции, добавляем его через разделитель |
             if item.get('КОММЕНТАРИЙ_ПОЗИЦИИ'):
                 base += f" | {item['КОММЕНТАРИЙ_ПОЗИЦИИ']}"
             return base
@@ -605,11 +570,9 @@ def main():
         order_details = "\n".join([format_order_item(item) for item in st.session_state.calculator_items])
 
 
-        # Дата и время создания заявки (столбец A)
         entry_datetime = datetime.now()
         entry_datetime_str = entry_datetime.strftime(SHEET_DATETIME_FORMAT)
         
-        # Дата и время доставки (столбец E) - используется для сортировки/вставки
         delivery_datetime = datetime.combine(st.session_state.k_delivery_date, st.session_state.k_delivery_time)
         delivery_datetime_str = delivery_datetime.strftime(SHEET_DATETIME_FORMAT)
 
@@ -628,13 +591,14 @@ def main():
 
         # Кнопка сохранения
         if st.session_state.app_mode == 'new':
-            # on_click=reset_form_fields безопасно удалит ключи перед st.rerun
-            if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, on_click=reset_form_fields):
+            if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='save_new_order'):
                 if save_order_data(data_to_save, orders_ws):
                     st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!"
+                    reset_form_fields()
+                    safe_reset_item_fields()
                     st.rerun()
         else:
-            if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True):
+            if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='update_order'):
                 if update_order_data(st.session_state.k_order_number, data_to_save, orders_ws):
                     st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!"
                     st.rerun()
@@ -678,7 +642,6 @@ def main():
             df_display['НОМЕР_ЗАЯВКИ'] = df_display['НОМЕР_ЗАЯВКИ'].astype(str)
             df_display['СУММА'] = pd.to_numeric(df_display['СУММА'], errors='coerce').fillna(0)
             
-            # Парсинг даты доставки для корректной сортировки в Streamlit (обеспечивает хронологию)
             df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display['ДАТА_ДОСТАВКИ'], format=PARSE_DATETIME_FORMAT, errors='coerce')
             
             # 2. Поиск и фильтрация
@@ -695,7 +658,6 @@ def main():
 
 
             # 3. Визуально красивый вывод
-            # Сортировка по дате доставки: ascending=True (от самого раннего к самому позднему)
             st.dataframe(
                 df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT', ascending=True).drop(columns=['ДАТА_ДОСТАВКИ_DT']),
                 column_config={
