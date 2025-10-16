@@ -156,6 +156,7 @@ def main():
     )
 
 
+    # При смене режима сбрасываем данные
     if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
         st.session_state.app_mode = 'new'
         st.session_state.k_order_number = ""
@@ -193,11 +194,15 @@ def main():
                 try:
                     data = orders_ws.get_all_records()
                     df = pd.DataFrame(data)
+                    # Фильтруем по номеру заявки
                     target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == search_number]
                     
                     if not target_rows.empty:
                         # Берем последнюю запись
                         row = target_rows.iloc[-1].to_dict()
+                        
+                        # --- ОБНОВЛЕНИЕ ПЕРЕМЕННЫХ СОСТОЯНИЯ ---
+                        # Эти переменные напрямую привязаны к виджетам через их 'key'
                         st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
                         st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
                         st.session_state.k_address = str(row.get('АДРЕС', ''))
@@ -206,6 +211,7 @@ def main():
                         # Дата доставки
                         delivery_date_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
                         try:
+                            # Убеждаемся, что дата в формате date (нужно для st.date_input)
                             date_obj = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
                             st.session_state.k_delivery_date = date_obj
                         except (ValueError, TypeError):
@@ -215,7 +221,9 @@ def main():
                         order_text = str(row.get('ЗАКАЗ', ''))
                         st.session_state.calculator_items = parse_order_text_to_items(order_text)
                         
-                        st.success(f"✅ Заявка №{search_number} загружена для редактирования")
+                        st.success(f"✅ Заявка №{search_number} загружена для редактирования. Обновите данные и нажмите 'Перезаписать'.")
+                        # Перезапуск, чтобы виджеты обновили свои значения
+                        st.rerun() 
                     else:
                         st.error(f"❌ Заявка с номером {search_number} не найдена")
                 except Exception as e:
@@ -228,7 +236,7 @@ def main():
 
 
     # =========================================================
-    # ОСНОВНАЯ ФОРМА
+    # ОСНОВНАЯ ФОРМА (С ИСПРАВЛЕННОЙ ПРИВЯЗКОЙ)
     # =========================================================
 
 
@@ -240,13 +248,14 @@ def main():
 
     with col1:
         if st.session_state.app_mode == 'new':
-            # Автогенерация номера для новой заявки
-            if not st.session_state.k_order_number:
+            # Логика автогенерации номера для новой заявки
+            if not st.session_state.k_order_number or st.session_state.k_order_number == "":
                 try:
                     if orders_ws:
                         data = orders_ws.get_all_records()
                         df = pd.DataFrame(data)
                         if not df.empty and 'НОМЕР_ЗАЯВКИ' in df.columns:
+                            # Фильтруем и находим максимальный номер
                             order_numbers = [int(n) for n in df['НОМЕР_ЗАЯВКИ'] if str(n).isdigit()]
                             next_number = max(order_numbers) + 1 if order_numbers else 1001
                             st.session_state.k_order_number = str(next_number)
@@ -257,42 +266,42 @@ def main():
                 except:
                     st.session_state.k_order_number = "1001"
             
-            st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True)
+            st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True, key='display_order_number')
         else:
-            st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True)
+            st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True, key='display_order_number_edit')
 
 
+        # ИСПРАВЛЕНО: Прямая привязка к k_client_phone
         st.text_input(
             "Телефон Клиента (с 7)",
             value=st.session_state.k_client_phone,
-            key='phone_input',
-            on_change=lambda: setattr(st.session_state, 'k_client_phone', st.session_state.phone_input)
+            key='k_client_phone' 
         )
 
 
     with col2:
+        # ИСПРАВЛЕНО: Прямая привязка к k_delivery_date
         st.date_input(
             "Дата Доставки",
             value=st.session_state.k_delivery_date,
             min_value=datetime.today().date(),
-            key='date_input',
-            on_change=lambda: setattr(st.session_state, 'k_delivery_date', st.session_state.date_input)
+            key='k_delivery_date' 
         )
         
+        # ИСПРАВЛЕНО: Прямая привязка к k_address
         st.text_input(
             "Адрес Доставки",
             value=st.session_state.k_address,
-            key='address_input',
-            on_change=lambda: setattr(st.session_state, 'k_address', st.session_state.address_input)
+            key='k_address'
         )
 
 
+    # ИСПРАВЛЕНО: Прямая привязка к k_comment
     st.text_area(
         "Комментарий / Примечание",
         value=st.session_state.k_comment,
         height=50,
-        key='comment_input',
-        on_change=lambda: setattr(st.session_state, 'k_comment', st.session_state.comment_input)
+        key='k_comment' 
     )
 
 
@@ -315,7 +324,8 @@ def main():
 
 
     with col_qty:
-        quantity = st.number_input("Кол-во", min_value=1, step=1, value=st.session_state.new_item_qty)
+        # Используем отдельный ключ для поля ввода количества
+        quantity = st.number_input("Кол-во", min_value=1, step=1, value=st.session_state.new_item_qty, key='new_item_qty')
 
 
     with col_add:
@@ -331,6 +341,9 @@ def main():
                         'ЦЕНА_ЗА_ЕД': price,
                         'СУММА': price * quantity
                     })
+                    # Сброс количества на 1 для удобства
+                    st.session_state.new_item_qty = 1
+                    st.rerun()
 
 
     # Отображение товаров
@@ -381,7 +394,7 @@ def main():
     st.subheader("Завершение Заявки")
 
 
-    # Проверка готовности к сохранению
+    # Проверка готовности к сохранению (Используем актуальные значения из st.session_state)
     valid_phone = is_valid_phone(st.session_state.k_client_phone)
     is_ready_to_send = (
         st.session_state.k_order_number and 
@@ -479,6 +492,7 @@ def main():
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
     items = []
+    # Обновленный паттерн, чтобы лучше справляться с форматированием чисел
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
     
     for line in order_text.split('\n'):
@@ -486,6 +500,7 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
         if match:
             name = match.group(1).strip()
             qty = int(match.group(2))
+            # Удаляем пробелы и заменяем запятые на точки для корректного float
             price_str = match.group(3).replace(' ', '').replace(',', '.')
             try:
                 price_per_unit = float(price_str)
@@ -517,27 +532,33 @@ def save_order_data(data_row: List[Any], orders_ws) -> bool:
 
 
 def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
-    """Обновляет существующую заявку"""
+    """
+    Обновляет существующую заявку, находя точный индекс строки в Gspread
+    (чтобы избежать ошибок из-за пустых строк).
+    """
     if not orders_ws:
         st.error("Не удалось подключиться к Google Sheets")
         return False
     
     try:
-        # Находим заявку по номеру
-        data = orders_ws.get_all_records()
-        df = pd.DataFrame(data)
-        target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
+        # Получаем значения столбца 'НОМЕР_ЗАЯВКИ' (B, индекс 2)
+        col_values = orders_ws.col_values(2) 
         
-        if target_rows.empty:
-            st.error(f"Заявка с номером {order_number} не найдена")
+        # Находим строку (индекс) последней заявки с этим номером,
+        # ища с конца списка, чтобы гарантировать последнюю версию заявки.
+        target_gspread_row_index = -1
+        for i in range(len(col_values) - 1, 0, -1):
+            if str(col_values[i]) == order_number:
+                # Индекс в col_values на 1 меньше номера строки.
+                target_gspread_row_index = i + 1 
+                break
+        
+        if target_gspread_row_index == -1:
+            st.error(f"Заявка с номером {order_number} не найдена в таблице.")
             return False
         
-        # Берем последнюю запись и обновляем ее
-        row_index_in_df = target_rows.index[-1]
-        gspread_row_index = row_index_in_df + 2
-        
-        # Обновляем строку
-        orders_ws.update(f'A{gspread_row_index}:H{gspread_row_index}', [data_row])
+        # Обновляем диапазон от A до H в найденной строке
+        orders_ws.update(f'A{target_gspread_row_index}:H{target_gspread_row_index}', [data_row])
         return True
         
     except Exception as e:
@@ -556,6 +577,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
         text += f"📝 *Комментарий:* {order_data['КОММЕНТАРИЙ']}\n"
     
     text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n"
+    # Используем запятую как разделитель тысяч
     text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n\n"
     text += "Пожалуйста, подтвердите заказ или укажите необходимые изменения."
     
