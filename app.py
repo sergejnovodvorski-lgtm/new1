@@ -141,16 +141,6 @@ def reset_form_fields():
     st.session_state.k_delivery_date = get_default_delivery_date()
     st.session_state.k_delivery_time = get_default_delivery_time()
     st.session_state.calculator_items = []
-    
-def safe_reset_item_fields():
-    """
-    Безопасный сброс полей товара без вызова StreamlitAPIException
-    """
-    # Используем callback для безопасного сброса
-    if 'new_item_qty_input' in st.session_state:
-        st.session_state.new_item_qty_input = 1
-    if 'new_item_comment_input' in st.session_state:
-        st.session_state.new_item_comment_input = ""
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
@@ -276,13 +266,6 @@ def main():
     if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
 
 
-    # Инициализация полей товаров с безопасным подходом
-    if 'new_item_qty_input' not in st.session_state: 
-        st.session_state.new_item_qty_input = 1
-    if 'new_item_comment_input' not in st.session_state: 
-        st.session_state.new_item_comment_input = ""
-
-
     # Загрузка данных
     price_df = load_price_list()
     orders_ws = get_orders_worksheet()
@@ -321,12 +304,10 @@ def main():
         if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
             st.session_state.app_mode = 'new'
             reset_form_fields()
-            safe_reset_item_fields()
             st.rerun()
         elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
             st.session_state.app_mode = 'edit'
             reset_form_fields()
-            safe_reset_item_fields()
             st.rerun()
             
         st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
@@ -438,54 +419,56 @@ def main():
 
 
         # =========================================================
-        # КАЛЬКУЛЯТОР ЗАКАЗА
+        # КАЛЬКУЛЯТОР ЗАКАЗА (ИСПРАВЛЕННАЯ ВЕРСИЯ)
         # =========================================================
         st.subheader("Состав Заказа (Калькулятор)")
+        
+        # Используем временные переменные вместо прямого изменения session_state
+        current_qty = 1
+        current_comment = ""
         
         col_item, col_qty = st.columns([5, 1])
         with col_item:
             selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty, key='item_selector')
         with col_qty:
-            st.number_input(
+            current_qty = st.number_input(
                 "Кол-во", 
                 min_value=1, 
                 step=1, 
-                value=st.session_state.new_item_qty_input, 
+                value=1,  # Всегда начинаем с 1
                 key='new_item_qty_input'
             )
         
         # ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
         col_comment, col_add = st.columns([5, 1])
         with col_comment:
-            st.text_input(
+            current_comment = st.text_input(
                 "Комментарий к позиции",
-                value=st.session_state.new_item_comment_input,
+                value="",  # Всегда начинаем с пустой строки
                 key='new_item_comment_input'
             )
         
         with col_add:
             st.markdown(" ") 
-            if st.button(
+            add_clicked = st.button(
                 "➕ Добавить", 
                 use_container_width=True, 
                 disabled=selected_item == price_items[0],
                 key='add_item_button'
-            ):
-                if selected_item != price_items[0]:
-                    price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
-                    if not price_row.empty:
-                        price = float(price_row.iloc[0]['ЦЕНА'])
-                        st.session_state.calculator_items.append({
-                            'НАИМЕНОВАНИЕ': selected_item,
-                            'КОЛИЧЕСТВО': st.session_state.new_item_qty_input,
-                            'ЦЕНА_ЗА_ЕД': price,
-                            'СУММА': price * st.session_state.new_item_qty_input,
-                            'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input
-                        })
-                        
-                        # Безопасный сброс полей товара
-                        safe_reset_item_fields()
-                        st.rerun()
+            )
+            
+            if add_clicked and selected_item != price_items[0]:
+                price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
+                if not price_row.empty:
+                    price = float(price_row.iloc[0]['ЦЕНА'])
+                    st.session_state.calculator_items.append({
+                        'НАИМЕНОВАНИЕ': selected_item,
+                        'КОЛИЧЕСТВО': current_qty,
+                        'ЦЕНА_ЗА_ЕД': price,
+                        'СУММА': price * current_qty,
+                        'КОММЕНТАРИЙ_ПОЗИЦИИ': current_comment
+                    })
+                    st.rerun()
 
 
         # Отображение товаров
@@ -590,18 +573,24 @@ def main():
 
 
         # Кнопка сохранения
-        if st.session_state.app_mode == 'new':
-            if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='save_new_order'):
-                if save_order_data(data_to_save, orders_ws):
-                    st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!"
-                    reset_form_fields()
-                    safe_reset_item_fields()
-                    st.rerun()
-        else:
-            if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='update_order'):
-                if update_order_data(st.session_state.k_order_number, data_to_save, orders_ws):
-                    st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!"
-                    st.rerun()
+        col_save1, col_save2 = st.columns(2)
+        with col_save1:
+            if st.session_state.app_mode == 'new':
+                if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='save_new_order'):
+                    if save_order_data(data_to_save, orders_ws):
+                        st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!"
+                        reset_form_fields()
+                        st.rerun()
+            else:
+                if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='update_order'):
+                    if update_order_data(st.session_state.k_order_number, data_to_save, orders_ws):
+                        st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!"
+                        st.rerun()
+        
+        with col_save2:
+            if st.button("🔄 Очистить форму", use_container_width=True, key='clear_form'):
+                reset_form_fields()
+                st.rerun()
 
 
         # Ссылка WhatsApp
