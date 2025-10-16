@@ -280,6 +280,8 @@ def main():
         st.session_state.last_success_message = None
     if 'form_reset_trigger' not in st.session_state:
         st.session_state.form_reset_trigger = False
+    if 'loaded_order_data' not in st.session_state:
+        st.session_state.loaded_order_data = None
 
 
     # Обработка сброса формы
@@ -289,6 +291,7 @@ def main():
         st.session_state.app_mode = 'new'
         st.session_state.calculator_items = []
         st.session_state.last_success_message = None
+        st.session_state.loaded_order_data = None
         st.rerun()
 
 
@@ -330,10 +333,12 @@ def main():
         if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
             st.session_state.app_mode = 'new'
             st.session_state.calculator_items = []
+            st.session_state.loaded_order_data = None
             st.rerun()
         elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
             st.session_state.app_mode = 'edit'
             st.session_state.calculator_items = []
+            st.session_state.loaded_order_data = None
             st.rerun()
             
         st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
@@ -352,12 +357,13 @@ def main():
                         target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == search_number]
                         if not target_rows.empty:
                             row = target_rows.iloc[-1].to_dict()
-                            # Используем временные переменные вместо прямого изменения session_state
-                            order_data = {
-                                'k_order_number': str(row.get('НОМЕР_ЗАЯВКИ', '')),
-                                'k_client_phone': str(row.get('ТЕЛЕФОН', '')),
-                                'k_address': str(row.get('АДРЕС', '')),
-                                'k_comment': str(row.get('КОММЕНТАРИЙ', '')),
+                            
+                            # Сохраняем данные найденной заявки в session_state
+                            st.session_state.loaded_order_data = {
+                                'order_number': str(row.get('НОМЕР_ЗАЯВКИ', '')),
+                                'client_phone': str(row.get('ТЕЛЕФОН', '')),
+                                'address': str(row.get('АДРЕС', '')),
+                                'comment': str(row.get('КОММЕНТАРИЙ', '')),
                                 'calculator_items': parse_order_text_to_items(str(row.get('ЗАКАЗ', '')))
                             }
                             
@@ -365,16 +371,17 @@ def main():
                             delivery_dt_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
                             try:
                                 dt_obj = datetime.strptime(delivery_dt_str, PARSE_DATETIME_FORMAT)
-                                delivery_date = dt_obj.date()
-                                delivery_time = dt_obj.time()
+                                st.session_state.loaded_order_data['delivery_date'] = dt_obj.date()
+                                st.session_state.loaded_order_data['delivery_time'] = dt_obj.time()
                             except (ValueError, TypeError):
-                                delivery_date = get_default_delivery_date()
-                                delivery_time = get_default_delivery_time()
-                                
-                            st.success(f"✅ Заявка №{search_number} загружена для редактирования.")
+                                st.session_state.loaded_order_data['delivery_date'] = get_default_delivery_date()
+                                st.session_state.loaded_order_data['delivery_time'] = get_default_delivery_time()
                             
-                            # Отображаем форму с загруженными данными
-                            st.session_state.calculator_items = order_data['calculator_items']
+                            # Загружаем товары в калькулятор
+                            st.session_state.calculator_items = st.session_state.loaded_order_data['calculator_items']
+                            
+                            st.success(f"✅ Заявка №{search_number} загружена для редактирования.")
+                            st.rerun()
                         else:
                             st.error(f"❌ Заявка с номером {search_number} не найдена")
                     except Exception as e:
@@ -395,9 +402,27 @@ def main():
         # Определяем начальные значения для полей формы
         if st.session_state.app_mode == 'new':
             default_order_number = generate_next_order_number()
+            default_client_phone = ""
+            default_address = ""
+            default_comment = ""
+            default_delivery_date = get_default_delivery_date()
+            default_delivery_time = get_default_delivery_time()
         else:
-            # В режиме редактирования используем данные из поиска или оставляем пустыми
-            default_order_number = ""
+            # В режиме редактирования используем данные из загруженной заявки или пустые значения
+            if st.session_state.loaded_order_data:
+                default_order_number = st.session_state.loaded_order_data.get('order_number', '')
+                default_client_phone = st.session_state.loaded_order_data.get('client_phone', '')
+                default_address = st.session_state.loaded_order_data.get('address', '')
+                default_comment = st.session_state.loaded_order_data.get('comment', '')
+                default_delivery_date = st.session_state.loaded_order_data.get('delivery_date', get_default_delivery_date())
+                default_delivery_time = st.session_state.loaded_order_data.get('delivery_time', get_default_delivery_time())
+            else:
+                default_order_number = ""
+                default_client_phone = ""
+                default_address = ""
+                default_comment = ""
+                default_delivery_date = get_default_delivery_date()
+                default_delivery_time = get_default_delivery_time()
 
 
         with col1:
@@ -407,14 +432,14 @@ def main():
                 order_number = st.text_input("Номер Заявки", value=default_order_number, key='order_number_edit')
         
         with col2:
-            client_phone = st.text_input("Телефон Клиента (с 7)", key='client_phone')
+            client_phone = st.text_input("Телефон Клиента (с 7)", value=default_client_phone, key='client_phone')
 
 
         # --- Поля для даты и времени ---
         with col3:
             delivery_date = st.date_input(
                 "Дата Доставки", 
-                value=get_default_delivery_date(), 
+                value=default_delivery_date, 
                 min_value=datetime.today().date(), 
                 key='delivery_date', 
                 format="DD.MM.YYYY"
@@ -423,15 +448,16 @@ def main():
         with col4:
             delivery_time = st.time_input(
                 "Время Доставки (интервал 30 мин)",
-                value=get_default_delivery_time(), 
+                value=default_delivery_time, 
                 step=TIME_STEP_SECONDS,
                 key='delivery_time'
             )
             
         # --- Поле адреса и комментария ---
-        address = st.text_input("Адрес Доставки", key='address')
+        address = st.text_input("Адрес Доставки", value=default_address, key='address')
         comment = st.text_area(
             "Комментарий / Примечание к заказу (общий)", 
+            value=default_comment,
             height=50, 
             key='comment'
         )
@@ -607,6 +633,7 @@ def main():
                 if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='update_order'):
                     if update_order_data(order_number, data_to_save, orders_ws):
                         st.session_state.last_success_message = f"🎉 Заявка №{order_number} успешно перезаписана!"
+                        st.session_state.loaded_order_data = None
                         st.rerun()
         
         with col_save2:
