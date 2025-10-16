@@ -64,10 +64,7 @@ def load_last_order_number_safe() -> str:
 
 def clear_form_state():
     """Сброс всех полей после успешной отправки."""
-    # Сохраняем режим работы
-    current_mode = st.session_state.get('app_mode', 'new')
-    
-    # Полный сброс состояния
+    # Сохраняем только критические значения
     keys_to_keep = ['app_mode', 'mode_selector_value', 'critical_error']
     new_state = {key: st.session_state.get(key) for key in keys_to_keep}
     st.session_state.clear()
@@ -76,7 +73,7 @@ def clear_form_state():
     # Восстанавливаем режим и устанавливаем значения по умолчанию
     st.session_state.calculator_items = []
     
-    if current_mode == 'new':
+    if st.session_state.app_mode == 'new':
         st.session_state.k_order_number = load_last_order_number_safe()
         st.session_state.k_order_number_input = st.session_state.k_order_number
     else:
@@ -85,8 +82,6 @@ def clear_form_state():
     
     st.session_state.k_delivery_date = get_default_delivery_date()
     st.session_state.k_target_row_index = None
-    
-    # Инициализируем поля ввода
     st.session_state.k_client_phone = ""
     st.session_state.k_address = ""
     st.session_state.k_comment = ""
@@ -99,14 +94,12 @@ def clear_form_state():
 
 def is_valid_phone(phone: str) -> str:
     """Нормализует телефон к формату 7XXXXXXXXXX. Возвращает нормализованный номер или пустую строку."""
-    normalized = re.sub(r'\D', '', phone)  # Удаляем все не-цифры
-    # Если номер начинается с 8, заменяем на 7
+    normalized = re.sub(r'\D', '', phone)
     if normalized.startswith('8') and len(normalized) == 11:
         normalized = '7' + normalized[1:]
-    # Проверка, соответствует ли телефон формату 7XXXXXXXXXX
     if len(normalized) == 11 and normalized.startswith('7'):
         return normalized
-    return ""  # Возвращаем пустую строку, если невалиден
+    return ""
 
 
 def switch_mode():
@@ -114,19 +107,8 @@ def switch_mode():
     new_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
     
     if st.session_state.get('app_mode') != new_mode:
-        # Сохраняем необходимые значения перед очисткой
-        mode_selector = st.session_state.mode_selector_value
-        
-        # Очищаем состояние
-        keys_to_keep = ['mode_selector_value', 'critical_error']
-        saved_state = {key: st.session_state.get(key) for key in keys_to_keep}
-        st.session_state.clear()
-        st.session_state.update(saved_state)
-        
-        # Устанавливаем новый режим
         st.session_state.app_mode = new_mode
         
-        # Инициализируем состояние для нового режима
         if new_mode == 'new':
             st.session_state.k_order_number = load_last_order_number_safe()
             st.session_state.k_order_number_input = st.session_state.k_order_number
@@ -235,7 +217,6 @@ def load_price_list():
         df['ЦЕНА'] = pd.to_numeric(df['ЦЕНА'], errors='coerce')
         df.dropna(subset=['ЦЕНА'], inplace=True)
         
-        st.info(f"✅ Прайс-лист загружен успешно. Обнаружено {len(df)} позиций.")
         return df
         
     except gspread.exceptions.SpreadsheetNotFound:
@@ -243,7 +224,7 @@ def load_price_list():
     except gspread.exceptions.WorksheetNotFound:
         set_critical_error(f"Лист '{WORKSHEET_NAME_PRICE}' не найден.")
     except Exception as e:
-        set_critical_error("Неизвестная ошибка при загрузке прайса (проверьте заголовки и формат цены).", f"Ошибка: {e}")
+        set_critical_error("Неизвестная ошибка при загрузке прайса.", f"Ошибка: {e}")
     
     return pd.DataFrame()
 
@@ -275,21 +256,16 @@ def get_orders_worksheet():
 
 
 def load_order_data(order_number: str):
-    """
-    Загружает данные заявки по номеру из Google Sheets и обновляет st.session_state, 
-    сохраняя индекс строки для последующего обновления.
-    """
+    """Загружает данные заявки по номеру из Google Sheets."""
     orders_ws = get_orders_worksheet()
     if not orders_ws:
         st.error("Не удалось подключиться к базе данных.")
         return False
     
     try:
-        # Получаем все записи (кроме заголовка)
         data = orders_ws.get_all_records()
         df = pd.DataFrame(data)
         
-        # Фильтруем по номеру заявки
         target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
         
         if target_rows.empty:
@@ -301,17 +277,17 @@ def load_order_data(order_number: str):
         row_index_in_df = target_rows.index[-1]
         row = target_rows.iloc[-1].to_dict()
         
-        # 1. Сохранение номера строки для обновления (индекс в gspread = индекс в df + 2)
+        # Сохраняем номер строки для обновления
         gspread_row_index = row_index_in_df + 2
         st.session_state.k_target_row_index = gspread_row_index
         
-        # 2. Обновляем основные поля формы
+        # Обновляем поля формы
         st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
         st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
         st.session_state.k_address = str(row.get('АДРЕС', ''))
         st.session_state.k_comment = str(row.get('КОММЕНТАРИЙ', ''))
         
-        # 3. Обновляем дату доставки
+        # Обновляем дату доставки
         delivery_date_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
         try:
             date_obj = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
@@ -319,12 +295,11 @@ def load_order_data(order_number: str):
         except (ValueError, TypeError):
             st.session_state.k_delivery_date = get_default_delivery_date()
         
-        # 4. Парсим состав заказа
+        # Парсим состав заказа
         order_text = str(row.get('ЗАКАЗ', ''))
         st.session_state.calculator_items = parse_order_text_to_items(order_text)
         
-        st.success(f"✅ Данные заявки №**{order_number}** успешно загружены для корректировки. (Строка {gspread_row_index})")
-        st.warning("Внимание: При сохранении **существующая заявка будет перезаписана**!")
+        st.success(f"✅ Данные заявки №**{order_number}** загружены. (Строка {gspread_row_index})")
         return True
         
     except Exception as e:
@@ -362,13 +337,13 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
 # =========================================================
 
 
-# Сначала загружаем данные
+# Загружаем данные
 price_df = load_price_list()
 orders_ws = get_orders_worksheet()
 price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist() if not price_df.empty else ["--- Прайс не загружен ---"]
 
 
-# Инициализация session_state с проверкой существующих значений
+# Инициализация session_state
 if 'critical_error' not in st.session_state:
     st.session_state.critical_error = None
 
@@ -443,14 +418,12 @@ if 'new_item_select' not in st.session_state:
 
 
 def parse_conversation(text: str):
-    """Извлечение данных из текста переписки и обновление st.session_state."""
+    """Извлечение данных из текста переписки."""
     st.session_state.parsing_log = f"--- ЛОГ ПАРСИНГА ({datetime.now().strftime('%H:%M:%S')}) ---\n"
-    loaded_data = False
     
-    # 1. Извлечение номера телефона
+    # Извлечение номера телефона
     phone_matches_raw = re.findall(r'(\d{7,11})', text)
     phone_counts = {}
-    st.session_state.parsing_log += f"Поиск телефонов (результаты): {phone_matches_raw}\n"
     
     for raw_phone in phone_matches_raw:
         normalized_phone = is_valid_phone(raw_phone)
@@ -461,44 +434,29 @@ def parse_conversation(text: str):
         phone = max(phone_counts.items(), key=lambda item: item[1])[0]
         st.session_state.k_client_phone = phone
         st.info(f"✅ Телефон клиента найден: **{phone}**")
-        st.session_state.parsing_log += f"Определен основной телефон: {phone}\n"
-    else:
-        st.warning("⚠️ Телефон не найден. Пожалуйста, введите вручную.")
-        st.session_state.parsing_log += f"Телефон не определен.\n"
     
-    # 2. Извлечение номера заявки/счета
+    # Извлечение номера заявки
     order_match = re.search(r'(?:заявк[аи]|заказ|счет|№|номер)\s*[\W]*(\d+)', text, re.IGNORECASE)
-    st.session_state.parsing_log += f"Поиск номера заявки (матч): {order_match.group(1) if order_match else 'None'}\n"
     
     if order_match and st.session_state.app_mode == 'edit':
         found_order_num = order_match.group(1)
         st.session_state.k_order_number_input = found_order_num
         st.session_state.k_order_number = found_order_num
         if load_order_data(found_order_num):
-            loaded_data = True
             st.info(f"✅ Номер Заявки найден и установлен: {found_order_num}. Данные загружены.")
             return
-    elif order_match and st.session_state.app_mode == 'new':
-        st.info(f"💡 Обнаружен номер {order_match.group(1)}, но в режиме 'Новая заявка' он игнорируется.")
     
-    # 3. Извлечение даты доставки
+    # Извлечение даты доставки
     delivery_date = None
-    relative_match = ""
     today = datetime.today().date()
     
     if re.search(r'послезавтра', text, re.IGNORECASE):
         delivery_date = today + timedelta(days=2)
-        relative_match = "послезавтра (+2 дня)"
     elif re.search(r'завтра', text, re.IGNORECASE):
         delivery_date = today + timedelta(days=1)
-        relative_match = "завтра (+1 день)"
-    
-    st.session_state.parsing_log += f"Поиск относительной даты: {relative_match or 'Нет'}\n"
     
     if not delivery_date:
         date_match = re.search(r'(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?', text)
-        st.session_state.parsing_log += f"Поиск конкретной даты (матч): {date_match.groups() if date_match else 'None'}\n"
-        
         if date_match:
             day, month, year_str = date_match.groups()
             current_year = today.year
@@ -509,53 +467,38 @@ def parse_conversation(text: str):
                     year = current_year
                 delivery_date = datetime(year, int(month), int(day)).date()
             except ValueError:
-                st.session_state.parsing_log += f"Ошибка преобразования даты: {day}.{month}.{year_str or current_year}\n"
                 pass
     
     if delivery_date:
-        initial_date_str = delivery_date.strftime('%d.%m.%Y')
-        year_corrected = False
-        
         while delivery_date < today and delivery_date.year < today.year + 1:
             delivery_date = delivery_date.replace(year=delivery_date.year + 1)
-            year_corrected = True
-            
-        if year_corrected:
-            st.warning(f"⚠️ Обнаруженная дата ({initial_date_str}) была в прошлом. Год скорректирован на **{delivery_date.year}**.")
-            st.session_state.parsing_log += f"Коррекция года: Исходная {initial_date_str}, Скорректирована на {delivery_date.year}\n"
-            
         st.session_state.k_delivery_date = delivery_date
         st.info(f"✅ Дата Доставки найдена: **{delivery_date.strftime('%d.%m.%Y')}**")
-    else:
-        tomorrow = today + timedelta(days=1)
-        st.session_state.k_delivery_date = tomorrow
-        st.warning("⚠️ Дата доставки не найдена. Установлена на 'завтра'.")
-        st.session_state.parsing_log += f"Дата доставки не найдена, установлена по умолчанию: {tomorrow.strftime('%d.%m.%Y')}\n"
     
     st.rerun()
 
 
 def save_data_to_gsheets(data_row: List[Any]) -> bool:
-    """Обновляет существующую строку или добавляет новую в лист ЗАЯВКИ."""
+    """Сохраняет или обновляет данные в Google Sheets."""
     if orders_ws is None:
         st.error("Не удалось подключиться к листу для записи данных.")
         return False
     
     row_index = st.session_state.k_target_row_index
     
-    with st.spinner(f"⏳ {'Обновление' if row_index else 'Сохранение'} заявки в Google Sheets..."):
+    with st.spinner(f"⏳ {'Обновление' if row_index else 'Сохранение'} заявки..."):
         try:
             if row_index and isinstance(row_index, int) and row_index > 1:
-                # ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕЙ СТРОКИ
-                orders_ws.update(f'A{row_index}:{gspread.utils.rowcol_to_a1(row_index, len(data_row))}', [data_row])
+                # ОБНОВЛЕНИЕ существующей строки
+                orders_ws.update(f'A{row_index}:H{row_index}', [data_row])
                 return True
             else:
-                # ДОБАВЛЕНИЕ НОВОЙ СТРОКИ
+                # ДОБАВЛЕНИЕ новой строки
                 orders_ws.append_row(data_row)
                 return True
                 
         except Exception as e:
-            st.error(f"Ошибка {'обновления' if row_index else 'записи'} в Google Sheets: {e}")
+            st.error(f"Ошибка записи в Google Sheets: {e}")
             return False
 
 
@@ -565,11 +508,10 @@ def handle_save_and_clear(data_to_save: List[Any], is_update: bool):
         success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно {'перезаписана' if is_update else 'сохранена'}!"
         st.session_state.last_success_message = success_message
         
-        # ВАЖНОЕ ИСПРАВЛЕНИЕ: Не очищаем форму в режиме редактирования
+        # В режиме редактирования НЕ очищаем форму полностью
         if is_update:
             st.success(success_message)
-            # В режиме редактирования НЕ очищаем форму и НЕ сбрасываем target_row_index
-            # Пользователь может продолжать редактирование
+            # Сохраняем target_row_index для возможных дальнейших изменений
         else:
             # В режиме новой заявки очищаем форму
             st.session_state.do_clear_form = True
@@ -581,7 +523,7 @@ def handle_save_and_clear(data_to_save: List[Any], is_update: bool):
 
 
 def add_item():
-    """Добавляет выбранный товар в список в session_state."""
+    """Добавляет выбранный товар в список."""
     selected_name = st.session_state.new_item_select
     try:
         quantity = int(st.session_state.new_item_qty)
@@ -615,17 +557,18 @@ def remove_item(index: int):
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
     """Генерирует ссылку на WhatsApp с предзаполненным текстом."""
-    text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа и подтвердите их:\n"
-    text += f"🆔 Номер Заявки: {order_data['НОМЕР_ЗАЯВКИ']}\n"
-    text += f"📞 Телефон: {order_data['ТЕЛЕФОН']}\n"
-    text += f"📍 Адрес: {order_data['АДРЕС']}\n"
-    text += f"🗓️ Дата Доставки: {order_data['ДАТА_ДОСТАВКИ']}\n"
+    text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа:\n\n"
+    text += f"📋 *Номер Заявки:* {order_data['НОМЕР_ЗАЯВКИ']}\n"
+    text += f"📞 *Телефон:* {order_data['ТЕЛЕФОН']}\n"
+    text += f"📍 *Адрес:* {order_data['АДРЕС']}\n"
+    text += f"🗓️ *Дата Доставки:* {order_data['ДАТА_ДОСТАВКИ']}\n"
     
     if order_data.get('КОММЕНТАРИЙ'):
-        text += f"📝 Комментарий: {order_data['КОММЕНТАРИЙ']}\n"
+        text += f"📝 *Комментарий:* {order_data['КОММЕНТАРИЙ']}\n"
     
-    text += f"\n🛒 Состав Заказа:\n{order_data['ЗАКАЗ']}\n"
-    text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n"
+    text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n"
+    text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n\n"
+    text += "Пожалуйста, подтвердите заказ или укажите необходимые изменения."
     
     encoded_text = urllib.parse.quote(text)
     normalized_phone = is_valid_phone(target_phone)
@@ -633,7 +576,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     if not normalized_phone:
         target_phone_final = MANAGER_WHATSAPP_PHONE
     else:
-        target_phone_final = '+' + normalized_phone
+        target_phone_final = normalized_phone
         
     return f"https://wa.me/{target_phone_final}?text={encoded_text}"
 
@@ -651,7 +594,7 @@ if st.session_state.critical_error:
 st.title("Ввод Новой Заявки CRM 📝")
 
 
-# Обработка очистки формы в безопасном месте
+# Обработка очистки формы
 if st.session_state.do_clear_form:
     if st.session_state.get('last_success_message'):
         st.success(st.session_state.last_success_message)
@@ -661,14 +604,13 @@ if st.session_state.do_clear_form:
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-## Блок Выбора Режима и Парсинга
+## Блок Выбора Режима
 # ----------------------------------------------------------------------------------------------------------------------
 
 
 st.subheader("Выбор Режима Работы")
 
 
-# Радио-кнопка для выбора режима
 st.radio(
     "Выберите действие:",
     options=['Новая заявка', 'Редактировать существующую'],
@@ -715,21 +657,16 @@ st.markdown("---")
 
 
 # --- Блок Парсинга ---
-with st.expander("🤖 Парсинг Переписки (извлекает телефон, дату и заказ)", expanded=False):
-    st.subheader("Вставьте текст переписки")
-    conversation_text = st.text_area(
-        "Вставьте полный текст переписки с клиентом сюда:",
+with st.expander("🤖 Парсинг Переписки", expanded=False):
+    st.text_area(
+        "Вставьте текст переписки с клиентом:",
         key='conversation_text_input',
         height=150
     )
     
     if st.button("🔍 Запустить Парсинг Данных", use_container_width=True):
-        if conversation_text:
-            parse_conversation(conversation_text)
-    
-    if st.session_state.parsing_log:
-        st.caption("Лог Парсинга:")
-        st.code(st.session_state.parsing_log, language='text')
+        if st.session_state.conversation_text_input:
+            parse_conversation(st.session_state.conversation_text_input)
 
 
 st.markdown("---")
@@ -803,8 +740,7 @@ with col_item:
         "Выбор позиции",
         price_items,
         key='new_item_select',
-        disabled=price_df.empty,
-        index=price_items.index(st.session_state.new_item_select) if st.session_state.new_item_select in price_items else 0
+        disabled=price_df.empty
     )
 
 
@@ -813,8 +749,7 @@ with col_qty:
         "Кол-во",
         min_value=1,
         step=1,
-        key='new_item_qty',
-        value=st.session_state.new_item_qty
+        key='new_item_qty'
     )
 
 
@@ -878,12 +813,12 @@ is_ready_to_send = (
 )
 
 
-# Проверка возможности сохранения в режиме редактирования
+# Проверка возможности сохранения
 can_save = is_ready_to_send
 if st.session_state.app_mode == 'edit' and not st.session_state.k_target_row_index:
     can_save = False
     if is_ready_to_send:
-        st.error("❌ В режиме 'Редактировать' необходимо сначала загрузить заявку по номеру, нажав 'Загрузить Заявку'.")
+        st.error("❌ В режиме 'Редактировать' необходимо сначала загрузить заявку по номеру.")
 
 
 order_details = "\n".join(
@@ -899,7 +834,7 @@ if not is_ready_to_send and st.session_state.app_mode == 'new':
     if not st.session_state.k_client_phone:
         missing_fields.append("Телефон Клиента")
     elif not valid_phone:
-        missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
+        missing_fields.append("Телефон (неверный формат)")
     if not st.session_state.k_address:
         missing_fields.append("Адрес Доставки")
     if not st.session_state.calculator_items:
@@ -909,10 +844,9 @@ if not is_ready_to_send and st.session_state.app_mode == 'new':
         st.error(f"❌ Заявка не готова к сохранению! Необходимо заполнить: {', '.join(missing_fields)}")
 
 
-# 1. Подготовка данных
+# Подготовка данных
 is_update = bool(st.session_state.k_target_row_index)
 button_label = "💾 Перезаписать Заявку" if is_update else "💾 Сохранить Новую Заявку"
-button_type = "primary"
 
 
 data_to_save = [
@@ -920,19 +854,19 @@ data_to_save = [
     st.session_state.k_order_number,
     valid_phone,
     st.session_state.k_address,
-    st.session_state.k_delivery_date.strftime('%Y-%m-%d') if st.session_state.k_delivery_date else "",
+    st.session_state.k_delivery_date.strftime('%Y-%m-%d'),
     st.session_state.k_comment,
     order_details,
     float(total_sum) if not math.isnan(total_sum) else 0.0
 ]
 
 
-# 2. Кнопка "Сохранить в CRM"
-if st.button(button_label, disabled=not can_save, type=button_type, use_container_width=True):
+# Кнопка сохранения
+if st.button(button_label, disabled=not can_save, type="primary", use_container_width=True):
     handle_save_and_clear(data_to_save, is_update)
 
 
-# 3. Блок генерации ссылки WhatsApp
+# Ссылка WhatsApp
 if is_ready_to_send:
     whatsapp_data = {
         'НОМЕР_ЗАЯВКИ': st.session_state.k_order_number,
@@ -955,4 +889,3 @@ if is_ready_to_send:
         f'</button></a>',
         unsafe_allow_html=True
     )
-    st.caption("Кликните, чтобы открыть чат с предзаполненным сообщением.")
