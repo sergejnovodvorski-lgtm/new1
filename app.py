@@ -104,12 +104,124 @@ def get_default_delivery_date():
 
 
 # =========================================================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =========================================================
+
+
+def reset_quantity():
+    """Сбрасывает значение поля ввода количества в 1 после добавления товара."""
+    # Эту операцию разрешено выполнять только в on_click/callback
+    st.session_state.new_item_qty_input = 1
+
+
+def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
+    items = []
+    pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
+    
+    for line in order_text.split('\n'):
+        match = pattern.search(line.strip())
+        if match:
+            name = match.group(1).strip()
+            qty = int(match.group(2))
+            price_str = match.group(3).replace(' ', '').replace(',', '.')
+            try:
+                price_per_unit = float(price_str)
+            except ValueError:
+                price_per_unit = 0.0
+                
+            items.append({
+                'НАИМЕНОВАНИЕ': name,
+                'КОЛИЧЕСТВО': qty,
+                'ЦЕНА_ЗА_ЕД': price_per_unit,
+                'СУММА': price_per_unit * qty
+            })
+    
+    return items
+
+
+def save_order_data(data_row: List[Any], orders_ws) -> bool:
+    """Сохраняет новую заявку"""
+    if not orders_ws:
+        st.error("Не удалось подключиться к Google Sheets")
+        return False
+    
+    try:
+        orders_ws.append_row(data_row)
+        return True
+    except Exception as e:
+        st.error(f"Ошибка сохранения заявки: {e}")
+        return False
+
+
+def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
+    """
+    Обновляет существующую заявку, находя точный индекс строки в Gspread
+    (чтобы избежать ошибок из-за пустых строк).
+    """
+    if not orders_ws:
+        st.error("Не удалось подключиться к Google Sheets")
+        return False
+    
+    try:
+        # Получаем значения столбца 'НОМЕР_ЗАЯВКИ' (B, индекс 2)
+        col_values = orders_ws.col_values(2) 
+        
+        # Находим строку (индекс) последней заявки с этим номером,
+        # ища с конца списка, чтобы гарантировать последнюю версию заявки.
+        target_gspread_row_index = -1
+        for i in range(len(col_values) - 1, 0, -1):
+            if str(col_values[i]) == order_number:
+                # Индекс в col_values на 1 меньше номера строки.
+                target_gspread_row_index = i + 1 
+                break
+        
+        if target_gspread_row_index == -1:
+            st.error(f"Заявка с номером {order_number} не найдена в таблице.")
+            return False
+        
+        # Обновляем диапазон от A до H в найденной строке
+        orders_ws.update(f'A{target_gspread_row_index}:H{target_gspread_row_index}', [data_row])
+        return True
+        
+    except Exception as e:
+        st.error(f"Ошибка обновления заявки: {e}")
+        return False
+
+
+def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
+    text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа:\n\n"
+    text += f"📋 *Номер Заявки:* {order_data['НОМЕР_ЗАЯВКИ']}\n"
+    text += f"📞 *Телефон:* {order_data['ТЕЛЕФОН']}\n"
+    text += f"📍 *Адрес:* {order_data['АДРЕС']}\n"
+    text += f"🗓️ *Дата Доставки:* {order_data['ДАТА_ДОСТАВКИ']}\n"
+    
+    if order_data.get('КОММЕНТАРИЙ'):
+        text += f"📝 *Комментарий:* {order_data['КОММЕНТАРИЙ']}\n"
+    
+    text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n"
+    text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n\n"
+    text += "Пожалуйста, подтвердите заказ или укажите необходимые изменения."
+    
+    encoded_text = urllib.parse.quote(text)
+    normalized_phone = is_valid_phone(target_phone)
+    
+    if not normalized_phone:
+        target_phone_final = MANAGER_WHATSAPP_PHONE
+    else:
+        target_phone_final = normalized_phone
+        
+    return f"https://wa.me/{target_phone_final}?text={encoded_text}"
+
+
+
+
+# =========================================================
 # ОСНОВНАЯ ЛОГИКА ПРИЛОЖЕНИЯ
 # =========================================================
 
 
 def main():
-    # Инициализация состояния (СДЕЛАНО БОЛЕЕ НАДЕЖНО)
+    # Инициализация состояния (Сделано надежно)
     if 'app_mode' not in st.session_state:
         st.session_state.app_mode = 'new'
     if 'calculator_items' not in st.session_state:
@@ -124,13 +236,11 @@ def main():
         st.session_state.k_comment = ""
     if 'k_delivery_date' not in st.session_state:
         st.session_state.k_delivery_date = get_default_delivery_date()
-    # Ключ, вызывавший ошибку:
     if 'new_item_qty' not in st.session_state:
         st.session_state.new_item_qty = 1
-    if 'conversation_text_input' not in st.session_state:
-        st.session_state.conversation_text_input = ""
-    if 'parsing_log' not in st.session_state:
-        st.session_state.parsing_log = ""
+    # Инициализация ключа для виджета number_input
+    if 'new_item_qty_input' not in st.session_state:
+        st.session_state.new_item_qty_input = 1
     if 'last_success_message' not in st.session_state:
         st.session_state.last_success_message = None
     
@@ -209,7 +319,6 @@ def main():
                         row = target_rows.iloc[-1].to_dict()
                         
                         # --- ОБНОВЛЕНИЕ ПЕРЕМЕННЫХ СОСТОЯНИЯ ---
-                        # Эти переменные напрямую привязаны к виджетам через их 'key'
                         st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
                         st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
                         st.session_state.k_address = str(row.get('АДРЕС', ''))
@@ -241,7 +350,7 @@ def main():
 
 
     # =========================================================
-    # ОСНОВНАЯ ФОРМА (С ИСПРАВЛЕННОЙ ПРИВЯЗКОЙ)
+    # ОСНОВНАЯ ФОРМА
     # =========================================================
 
 
@@ -275,7 +384,6 @@ def main():
             st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True, key='display_order_number_edit')
 
 
-        # ИСПРАВЛЕНО: Прямая привязка к k_client_phone
         st.text_input(
             "Телефон Клиента (с 7)",
             value=st.session_state.k_client_phone,
@@ -284,7 +392,6 @@ def main():
 
 
     with col2:
-        # ИСПРАВЛЕНО: Прямая привязка к k_delivery_date
         st.date_input(
             "Дата Доставки",
             value=st.session_state.k_delivery_date,
@@ -292,7 +399,6 @@ def main():
             key='k_delivery_date' 
         )
         
-        # ИСПРАВЛЕНО: Прямая привязка к k_address
         st.text_input(
             "Адрес Доставки",
             value=st.session_state.k_address,
@@ -300,7 +406,6 @@ def main():
         )
 
 
-    # ИСПРАВЛЕНО: Прямая привязка к k_comment
     st.text_area(
         "Комментарий / Примечание",
         value=st.session_state.k_comment,
@@ -313,7 +418,7 @@ def main():
 
 
     # =========================================================
-    # КАЛЬКУЛЯТОР ЗАКАЗА (ИСПРАВЛЕННЫЙ number_input)
+    # КАЛЬКУЛЯТОР ЗАКАЗА
     # =========================================================
 
 
@@ -328,21 +433,25 @@ def main():
 
 
     with col_qty:
-        # ИСПРАВЛЕНО: Используем 'new_item_qty_input' как ключ виджета.
-        # Используем st.session_state.new_item_qty как начальное значение.
-        # Значение, вводимое пользователем, будет сохранено в new_item_qty_input
+        # Используем session_state.new_item_qty_input для управления значением
         quantity = st.number_input(
             "Кол-во", 
             min_value=1, 
             step=1, 
-            value=st.session_state.new_item_qty, 
+            value=st.session_state.new_item_qty_input, 
             key='new_item_qty_input'
         )
 
 
     with col_add:
         st.markdown(" ")
-        if st.button("➕ Добавить", use_container_width=True, disabled=selected_item == price_items[0]):
+        # ИСПРАВЛЕНО: on_click для сброса количества
+        if st.button(
+            "➕ Добавить", 
+            use_container_width=True, 
+            disabled=selected_item == price_items[0],
+            on_click=reset_quantity # <--- Сброс количества
+        ):
             if selected_item != price_items[0]:
                 price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
                 if not price_row.empty:
@@ -354,9 +463,8 @@ def main():
                         'ЦЕНА_ЗА_ЕД': price,
                         'СУММА': price * st.session_state.new_item_qty_input
                     })
-                    # Сброс количества на 1 для удобства
-                    st.session_state.new_item_qty_input = 1
-                    st.rerun()
+                    # st.rerun() вызывается автоматически после on_click и логики кнопки.
+                    st.rerun() # Оставляем rerund для обновления списка товаров
 
 
     # Отображение товаров
@@ -369,7 +477,7 @@ def main():
             df_items[['НАИМЕНОВАНИЕ', 'КОЛИЧЕСТВО', 'ЦЕНА_ЗА_ЕД', 'СУММА']],
             column_config={
                 'НАИМЕНОВАНИЕ': 'Товар',
-                'КОЛИЧЕСТВО': 'Кол-во',
+                'КОЛИЧЕЕСТВО': 'Кол-во',
                 'ЦЕНА_ЗА_ЕД': st.column_config.NumberColumn("Цена за ед.", format="%.2f РУБ."),
                 'СУММА': st.column_config.NumberColumn("Сумма", format="%.2f РУБ."),
             },
@@ -496,110 +604,6 @@ def main():
             f'</button></a>',
             unsafe_allow_html=True
         )
-
-
-# =========================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# =========================================================
-
-
-def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
-    items = []
-    pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)')
-    
-    for line in order_text.split('\n'):
-        match = pattern.search(line.strip())
-        if match:
-            name = match.group(1).strip()
-            qty = int(match.group(2))
-            price_str = match.group(3).replace(' ', '').replace(',', '.')
-            try:
-                price_per_unit = float(price_str)
-            except ValueError:
-                price_per_unit = 0.0
-                
-            items.append({
-                'НАИМЕНОВАНИЕ': name,
-                'КОЛИЧЕСТВО': qty,
-                'ЦЕНА_ЗА_ЕД': price_per_unit,
-                'СУММА': price_per_unit * qty
-            })
-    
-    return items
-
-
-def save_order_data(data_row: List[Any], orders_ws) -> bool:
-    """Сохраняет новую заявку"""
-    if not orders_ws:
-        st.error("Не удалось подключиться к Google Sheets")
-        return False
-    
-    try:
-        orders_ws.append_row(data_row)
-        return True
-    except Exception as e:
-        st.error(f"Ошибка сохранения заявки: {e}")
-        return False
-
-
-def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
-    """
-    Обновляет существующую заявку, находя точный индекс строки в Gspread
-    (чтобы избежать ошибок из-за пустых строк).
-    """
-    if not orders_ws:
-        st.error("Не удалось подключиться к Google Sheets")
-        return False
-    
-    try:
-        # Получаем значения столбца 'НОМЕР_ЗАЯВКИ' (B, индекс 2)
-        col_values = orders_ws.col_values(2) 
-        
-        # Находим строку (индекс) последней заявки с этим номером,
-        # ища с конца списка, чтобы гарантировать последнюю версию заявки.
-        target_gspread_row_index = -1
-        for i in range(len(col_values) - 1, 0, -1):
-            if str(col_values[i]) == order_number:
-                # Индекс в col_values на 1 меньше номера строки.
-                target_gspread_row_index = i + 1 
-                break
-        
-        if target_gspread_row_index == -1:
-            st.error(f"Заявка с номером {order_number} не найдена в таблице.")
-            return False
-        
-        # Обновляем диапазон от A до H в найденной строке
-        orders_ws.update(f'A{target_gspread_row_index}:H{target_gspread_row_index}', [data_row])
-        return True
-        
-    except Exception as e:
-        st.error(f"Ошибка обновления заявки: {e}")
-        return False
-
-
-def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
-    text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа:\n\n"
-    text += f"📋 *Номер Заявки:* {order_data['НОМЕР_ЗАЯВКИ']}\n"
-    text += f"📞 *Телефон:* {order_data['ТЕЛЕФОН']}\n"
-    text += f"📍 *Адрес:* {order_data['АДРЕС']}\n"
-    text += f"🗓️ *Дата Доставки:* {order_data['ДАТА_ДОСТАВКИ']}\n"
-    
-    if order_data.get('КОММЕНТАРИЙ'):
-        text += f"📝 *Комментарий:* {order_data['КОММЕНТАРИЙ']}\n"
-    
-    text += f"\n🛒 *Состав Заказа:*\n{order_data['ЗАКАЗ']}\n\n"
-    text += f"💰 *ИТОГО: {total_sum:,.2f} РУБ.*\n\n"
-    text += "Пожалуйста, подтвердите заказ или укажите необходимые изменения."
-    
-    encoded_text = urllib.parse.quote(text)
-    normalized_phone = is_valid_phone(target_phone)
-    
-    if not normalized_phone:
-        target_phone_final = MANAGER_WHATSAPP_PHONE
-    else:
-        target_phone_final = normalized_phone
-        
-    return f"https://wa.me/{target_phone_final}?text={encoded_text}"
 
 
 if __name__ == "__main__":
