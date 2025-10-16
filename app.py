@@ -146,6 +146,7 @@ def reset_form_fields():
     st.session_state.k_delivery_date = get_default_delivery_date()
     st.session_state.k_delivery_time = get_default_delivery_time()
     st.session_state.calculator_items = []
+    # Сброс поля количества
     if 'new_item_qty_input' in st.session_state:
         st.session_state.new_item_qty_input = 1
     # Сброс поля комментария к позиции
@@ -296,8 +297,10 @@ def main():
     if 'k_comment' not in st.session_state: st.session_state.k_comment = ""
     if 'k_delivery_date' not in st.session_state: st.session_state.k_delivery_date = get_default_delivery_date()
     if 'k_delivery_time' not in st.session_state: st.session_state.k_delivery_time = get_default_delivery_time()
+    
+    # Инициализация поля количества (по умолчанию 1)
     if 'new_item_qty_input' not in st.session_state: st.session_state.new_item_qty_input = 1
-    # НОВОЕ ПОЛЕ: Комментарий к позиции
+    # Инициализация поля комментария (по умолчанию "")
     if 'new_item_comment_input' not in st.session_state: st.session_state.new_item_comment_input = ""
     if 'last_success_message' not in st.session_state: st.session_state.last_success_message = None
 
@@ -465,7 +468,7 @@ def main():
         with col_item:
             selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty)
         with col_qty:
-            quantity = st.number_input(
+            st.number_input(
                 "Кол-во", 
                 min_value=1, 
                 step=1, 
@@ -476,7 +479,7 @@ def main():
         # НОВОЕ ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
         col_comment, col_add = st.columns([5, 1])
         with col_comment:
-            item_comment = st.text_input(
+            st.text_input(
                 "Комментарий к позиции",
                 value=st.session_state.new_item_comment_input,
                 key='new_item_comment_input'
@@ -498,11 +501,15 @@ def main():
                             'КОЛИЧЕСТВО': st.session_state.new_item_qty_input,
                             'ЦЕНА_ЗА_ЕД': price,
                             'СУММА': price * st.session_state.new_item_qty_input,
-                            'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input # Сохраняем комментарий
+                            'КОММЕНТАРИЙ_ПОЗИЦИИ': st.session_state.new_item_comment_input
                         })
-                        # Сбрасываем поле ввода комментария и количества после добавления
-                        st.session_state.new_item_comment_input = "" 
+                        
+                        # >>> ИСПРАВЛЕНИЕ: Сброс количества до 1 и комментария после добавления
                         st.session_state.new_item_qty_input = 1
+                        st.session_state.new_item_comment_input = "" 
+                        # <<< КОНЕЦ ИСПРАВЛЕНИЯ
+
+
                         st.rerun()
 
 
