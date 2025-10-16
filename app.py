@@ -282,6 +282,8 @@ def main():
         st.session_state.form_reset_trigger = False
     if 'loaded_order_data' not in st.session_state:
         st.session_state.loaded_order_data = None
+    if 'order_loaded' not in st.session_state:
+        st.session_state.order_loaded = False
 
 
     # Обработка сброса формы
@@ -292,6 +294,7 @@ def main():
         st.session_state.calculator_items = []
         st.session_state.last_success_message = None
         st.session_state.loaded_order_data = None
+        st.session_state.order_loaded = False
         st.rerun()
 
 
@@ -334,11 +337,13 @@ def main():
             st.session_state.app_mode = 'new'
             st.session_state.calculator_items = []
             st.session_state.loaded_order_data = None
+            st.session_state.order_loaded = False
             st.rerun()
         elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
             st.session_state.app_mode = 'edit'
             st.session_state.calculator_items = []
             st.session_state.loaded_order_data = None
+            st.session_state.order_loaded = False
             st.rerun()
             
         st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
@@ -379,6 +384,7 @@ def main():
                             
                             # Загружаем товары в калькулятор
                             st.session_state.calculator_items = st.session_state.loaded_order_data['calculator_items']
+                            st.session_state.order_loaded = True
                             
                             st.success(f"✅ Заявка №{search_number} загружена для редактирования.")
                             st.rerun()
@@ -409,7 +415,7 @@ def main():
             default_delivery_time = get_default_delivery_time()
         else:
             # В режиме редактирования используем данные из загруженной заявки или пустые значения
-            if st.session_state.loaded_order_data:
+            if st.session_state.order_loaded and st.session_state.loaded_order_data:
                 default_order_number = st.session_state.loaded_order_data.get('order_number', '')
                 default_client_phone = st.session_state.loaded_order_data.get('client_phone', '')
                 default_address = st.session_state.loaded_order_data.get('address', '')
@@ -634,6 +640,7 @@ def main():
                     if update_order_data(order_number, data_to_save, orders_ws):
                         st.session_state.last_success_message = f"🎉 Заявка №{order_number} успешно перезаписана!"
                         st.session_state.loaded_order_data = None
+                        st.session_state.order_loaded = False
                         st.rerun()
         
         with col_save2:
