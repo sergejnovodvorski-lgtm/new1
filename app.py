@@ -4,31 +4,26 @@ import pandas as pd
 import re
 from datetime import datetime, timedelta
 import urllib.parse
-import time
 from typing import List, Dict, Any
 import math
-from io import StringIO
 
 
 # =========================================================
-# 1. КОНСТАНТЫ И НАСТРОЙКИ
+# КОНСТАНТЫ И НАСТРОЙКИ
 # =========================================================
 
 
-# Настройки Google Sheets
 SPREADSHEET_NAME = "Start"
 WORKSHEET_NAME_ORDERS = "ЗАЯВКИ"
 WORKSHEET_NAME_PRICE = "ПРАЙС"
 
 
-# Заголовки, которые должны быть на листе 'ЗАЯВКИ'
 EXPECTED_HEADERS = [
     "ДАТА_ВВОДА", "НОМЕР_ЗАЯВКИ", "ТЕЛЕФОН", "АДРЕС", "ДАТА_ДОСТАВКИ", 
     "КОММЕНТАРИЙ", "ЗАКАЗ", "СУММА"
 ]
 
 
-# УКАЖИТЕ СВОЙ НОМЕР МЕНЕДЖЕРА
 MANAGER_WHATSAPP_PHONE = "79000000000"
 
 
@@ -39,61 +34,63 @@ st.set_page_config(
 )
 
 
-# --- Вспомогательные функции ---
+# =========================================================
+# БАЗОВЫЕ ФУНКЦИИ
+# =========================================================
 
 
-def set_critical_error(message, error_details=None):
-    """Функция для записи критической ошибки и остановки приложения."""
-    full_message = f"Критическая ошибка: {message}"
-    if error_details:
-        full_message += f"\n\nДетали: {error_details}"
-    st.session_state.critical_error = full_message
-
-
-def get_default_delivery_date():
-    return datetime.today().date() + timedelta(days=1)
-
-
-def load_last_order_number_safe() -> str:
-    """Безопасная обертка для load_last_order_number, чтобы не вызывать ошибку на старте."""
+@st.cache_resource(ttl=3600)
+def get_gsheet_client():
+    if "gcp_service_account" not in st.secrets:
+        st.error("Секрет 'gcp_service_account' не найден.")
+        return None
     try:
-        return load_last_order_number()
-    except Exception:
-        return "1001"
+        return gspread.service_account_from_dict(st.secrets["gcp_service_account"])
+    except Exception as e:
+        st.error(f"Ошибка аутентификации: {e}")
+        return None
 
 
-def clear_form_state():
-    """Сброс всех полей после успешной отправки."""
-    # Сохраняем только критические значения
-    keys_to_keep = ['app_mode', 'mode_selector_value', 'critical_error']
-    new_state = {key: st.session_state.get(key) for key in keys_to_keep}
-    st.session_state.clear()
-    st.session_state.update(new_state)
-    
-    # Восстанавливаем режим и устанавливаем значения по умолчанию
-    st.session_state.calculator_items = []
-    
-    if st.session_state.app_mode == 'new':
-        st.session_state.k_order_number = load_last_order_number_safe()
-        st.session_state.k_order_number_input = st.session_state.k_order_number
-    else:
-        st.session_state.k_order_number_input = ""
-        st.session_state.k_order_number = ""
-    
-    st.session_state.k_delivery_date = get_default_delivery_date()
-    st.session_state.k_target_row_index = None
-    st.session_state.k_client_phone = ""
-    st.session_state.k_address = ""
-    st.session_state.k_comment = ""
-    st.session_state.conversation_text_input = ""
-    st.session_state.parsing_log = ""
-    st.session_state.new_item_qty = 1
-    st.session_state.do_clear_form = False
-    st.session_state.last_success_message = None
+@st.cache_resource
+def get_orders_worksheet():
+    gc = get_gsheet_client()
+    if not gc:
+        return None
+    try:
+        sh = gc.open(SPREADSHEET_NAME)
+        worksheet = sh.worksheet(WORKSHEET_NAME_ORDERS)
+        # Проверяем заголовки
+        current_headers = worksheet.row_values(1)
+        if current_headers != EXPECTED_HEADERS:
+            worksheet.update('A1', [EXPECTED_HEADERS])
+        return worksheet
+    except Exception as e:
+        st.error(f"Ошибка доступа к листу: {e}")
+        return None
+
+
+@st.cache_data(ttl="1h")
+def load_price_list():
+    gc = get_gsheet_client()
+    if not gc:
+        return pd.DataFrame()
+    try:
+        sh = gc.open(SPREADSHEET_NAME)
+        worksheet = sh.worksheet(WORKSHEET_NAME_PRICE)
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+        if 'НАИМЕНОВАНИЕ' not in df.columns or 'ЦЕНА' not in df.columns:
+            st.error("В прайсе отсутствуют обязательные столбцы")
+            return pd.DataFrame()
+        df['ЦЕНА'] = pd.to_numeric(df['ЦЕНА'], errors='coerce')
+        df.dropna(subset=['ЦЕНА'], inplace=True)
+        return df
+    except Exception as e:
+        st.error(f"Ошибка загрузки прайса: {e}")
+        return pd.DataFrame()
 
 
 def is_valid_phone(phone: str) -> str:
-    """Нормализует телефон к формату 7XXXXXXXXXX. Возвращает нормализованный номер или пустую строку."""
     normalized = re.sub(r'\D', '', phone)
     if normalized.startswith('8') and len(normalized) == 11:
         normalized = '7' + normalized[1:]
@@ -102,209 +99,382 @@ def is_valid_phone(phone: str) -> str:
     return ""
 
 
-def switch_mode():
-    """Переключает режим работы и обновляет состояние формы."""
-    new_mode = 'new' if st.session_state.mode_selector_value == 'Новая заявка' else 'edit'
-    
-    if st.session_state.get('app_mode') != new_mode:
-        st.session_state.app_mode = new_mode
-        
-        if new_mode == 'new':
-            st.session_state.k_order_number = load_last_order_number_safe()
-            st.session_state.k_order_number_input = st.session_state.k_order_number
-        else:
-            st.session_state.k_order_number_input = ""
-            st.session_state.k_order_number = ""
-            
+def get_default_delivery_date():
+    return datetime.today().date() + timedelta(days=1)
+
+
+# =========================================================
+# ОСНОВНАЯ ЛОГИКА ПРИЛОЖЕНИЯ
+# =========================================================
+
+
+def main():
+    # Инициализация состояния
+    if 'initialized' not in st.session_state:
+        st.session_state.initialized = True
+        st.session_state.app_mode = 'new'
         st.session_state.calculator_items = []
-        st.session_state.k_delivery_date = get_default_delivery_date()
-        st.session_state.k_target_row_index = None
+        st.session_state.k_order_number = ""
         st.session_state.k_client_phone = ""
         st.session_state.k_address = ""
         st.session_state.k_comment = ""
+        st.session_state.k_delivery_date = get_default_delivery_date()
+        st.session_state.new_item_qty = 1
         st.session_state.conversation_text_input = ""
         st.session_state.parsing_log = ""
-        st.session_state.new_item_qty = 1
-        
+        st.session_state.last_success_message = None
+
+
+    # Загрузка данных
+    price_df = load_price_list()
+    orders_ws = get_orders_worksheet()
+    price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist() if not price_df.empty else ["--- Прайс не загружен ---"]
+
+
+    st.title("Ввод Новой Заявки CRM 📝")
+
+
+    # Обработка успешного сообщения
+    if st.session_state.last_success_message:
+        st.success(st.session_state.last_success_message)
+        st.session_state.last_success_message = None
+
+
+    # =========================================================
+    # ВЫБОР РЕЖИМА РАБОТЫ
+    # =========================================================
+
+
+    st.subheader("Выбор Режима Работы")
+
+
+    mode = st.radio(
+        "Выберите действие:",
+        ['Новая заявка', 'Редактировать существующую'],
+        horizontal=True,
+        key='mode_selector'
+    )
+
+
+    if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
+        st.session_state.app_mode = 'new'
+        st.session_state.k_order_number = ""
+        st.session_state.k_client_phone = ""
+        st.session_state.k_address = ""
+        st.session_state.k_comment = ""
+        st.session_state.k_delivery_date = get_default_delivery_date()
+        st.session_state.calculator_items = []
+        st.rerun()
+    elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
+        st.session_state.app_mode = 'edit'
+        st.session_state.k_order_number = ""
+        st.session_state.k_client_phone = ""
+        st.session_state.k_address = ""
+        st.session_state.k_comment = ""
+        st.session_state.k_delivery_date = get_default_delivery_date()
+        st.session_state.calculator_items = []
         st.rerun()
 
 
-# =========================================================
-# 2. ФУНКЦИИ ПОДКЛЮЧЕНИЯ И КЭШИРОВАНИЯ
-# =========================================================
+    st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
 
 
-@st.cache_resource(ttl=3600)
-def get_gsheet_client():
-    """Аутентификация и получение клиента gspread."""
-    if "gcp_service_account" not in st.secrets:
-        set_critical_error("Секрет 'gcp_service_account' не найден. Убедитесь, что он настроен в secrets.toml.")
-        return None
-    
-    try:
-        gc = gspread.service_account_from_dict(st.secrets["gcp_service_account"])
-        return gc
-    except Exception as e:
-        set_critical_error("Ошибка аутентификации gspread.", f"Ошибка: {e}")
-        return None
+    # =========================================================
+    # ПОИСК СУЩЕСТВУЮЩЕЙ ЗАЯВКИ
+    # =========================================================
 
 
-def initialize_worksheet_headers(worksheet: gspread.Worksheet):
-    """Проверяет и записывает заголовки на лист 'ЗАЯВКИ'."""
-    try:
-        current_headers = worksheet.row_values(1)
+    if st.session_state.app_mode == 'edit':
+        st.subheader("Поиск заявки для редактирования")
+        search_number = st.text_input("Введите номер заявки для поиска:", key='search_input')
         
-        if current_headers == EXPECTED_HEADERS:
-            return
+        if st.button("🔍 Найти и загрузить заявку", use_container_width=True):
+            if search_number and orders_ws:
+                try:
+                    data = orders_ws.get_all_records()
+                    df = pd.DataFrame(data)
+                    target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == search_number]
+                    
+                    if not target_rows.empty:
+                        # Берем последнюю запись
+                        row = target_rows.iloc[-1].to_dict()
+                        st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
+                        st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
+                        st.session_state.k_address = str(row.get('АДРЕС', ''))
+                        st.session_state.k_comment = str(row.get('КОММЕНТАРИЙ', ''))
+                        
+                        # Дата доставки
+                        delivery_date_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
+                        try:
+                            date_obj = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
+                            st.session_state.k_delivery_date = date_obj
+                        except (ValueError, TypeError):
+                            st.session_state.k_delivery_date = get_default_delivery_date()
+                        
+                        # Состав заказа
+                        order_text = str(row.get('ЗАКАЗ', ''))
+                        st.session_state.calculator_items = parse_order_text_to_items(order_text)
+                        
+                        st.success(f"✅ Заявка №{search_number} загружена для редактирования")
+                    else:
+                        st.error(f"❌ Заявка с номером {search_number} не найдена")
+                except Exception as e:
+                    st.error(f"Ошибка при загрузке заявки: {e}")
+            else:
+                st.error("Введите номер заявки")
+
+
+        st.markdown("---")
+
+
+    # =========================================================
+    # ОСНОВНАЯ ФОРМА
+    # =========================================================
+
+
+    st.subheader("Основные Данные Заявки")
+
+
+    col1, col2 = st.columns(2)
+
+
+    with col1:
+        if st.session_state.app_mode == 'new':
+            # Автогенерация номера для новой заявки
+            if not st.session_state.k_order_number:
+                try:
+                    if orders_ws:
+                        data = orders_ws.get_all_records()
+                        df = pd.DataFrame(data)
+                        if not df.empty and 'НОМЕР_ЗАЯВКИ' in df.columns:
+                            order_numbers = [int(n) for n in df['НОМЕР_ЗАЯВКИ'] if str(n).isdigit()]
+                            next_number = max(order_numbers) + 1 if order_numbers else 1001
+                            st.session_state.k_order_number = str(next_number)
+                        else:
+                            st.session_state.k_order_number = "1001"
+                    else:
+                        st.session_state.k_order_number = "1001"
+                except:
+                    st.session_state.k_order_number = "1001"
             
-        if current_headers and len(current_headers) > 0 and current_headers != ['']:
-            st.warning("⚠️ Заголовки листа 'ЗАЯВКИ' некорректны. Записываю новую структуру.")
-            worksheet.update('A1', [EXPECTED_HEADERS])
+            st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True)
         else:
-            worksheet.insert_row(EXPECTED_HEADERS, 1)
-            
-        st.success("🎉 Структура листа 'ЗАЯВКИ' успешно инициализирована/обновлена.")
-        
-    except Exception as e:
-        set_critical_error("Ошибка при инициализации заголовков листа 'ЗАЯВКИ'.", f"Ошибка: {e}")
+            st.text_input("Номер Заявки", value=st.session_state.k_order_number, disabled=True)
 
 
-@st.cache_data(ttl=5)
-def load_last_order_number() -> str:
-    """Загружает последний номер заявки и возвращает следующий."""
-    orders_ws = get_orders_worksheet()
-    if not orders_ws:
-        return "1001"
-    
-    try:
-        column_index = EXPECTED_HEADERS.index("НОМЕР_ЗАЯВКИ") + 1
-        column_values = orders_ws.col_values(column_index)
-        
-        if len(column_values) <= 1:
-            return "1001"
-            
-        order_numbers = [int(n) for n in column_values[1:] if n.isdigit()]
-        if not order_numbers:
-            return "1001"
-            
-        last_number = max(order_numbers)
-        next_number = last_number + 1
-        return str(next_number)
-        
-    except Exception as e:
-        return "1001"
+        st.text_input(
+            "Телефон Клиента (с 7)",
+            value=st.session_state.k_client_phone,
+            key='phone_input',
+            on_change=lambda: setattr(st.session_state, 'k_client_phone', st.session_state.phone_input)
+        )
 
 
-@st.cache_data(ttl="1h")
-def load_price_list():
-    """Загрузка и кэширование прайс-листа из Google Sheets."""
-    gc = get_gsheet_client()
-    if not gc:
-        return pd.DataFrame()
-    
-    try:
-        sh = gc.open(SPREADSHEET_NAME)
-        worksheet = sh.worksheet(WORKSHEET_NAME_PRICE)
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
+    with col2:
+        st.date_input(
+            "Дата Доставки",
+            value=st.session_state.k_delivery_date,
+            min_value=datetime.today().date(),
+            key='date_input',
+            on_change=lambda: setattr(st.session_state, 'k_delivery_date', st.session_state.date_input)
+        )
         
-        if 'НАИМЕНОВАНИЕ' not in df.columns or 'ЦЕНА' not in df.columns:
-            set_critical_error(
-                f"В листе '{WORKSHEET_NAME_PRICE}' отсутствуют обязательные столбцы 'НАИМЕНОВАНИЕ' или 'ЦЕНА'."
-            )
-            return pd.DataFrame()
-            
-        df['ЦЕНА'] = pd.to_numeric(df['ЦЕНА'], errors='coerce')
-        df.dropna(subset=['ЦЕНА'], inplace=True)
-        
-        return df
-        
-    except gspread.exceptions.SpreadsheetNotFound:
-        set_critical_error(f"Google Таблица '{SPREADSHEET_NAME}' не найдена.")
-    except gspread.exceptions.WorksheetNotFound:
-        set_critical_error(f"Лист '{WORKSHEET_NAME_PRICE}' не найден.")
-    except Exception as e:
-        set_critical_error("Неизвестная ошибка при загрузке прайса.", f"Ошибка: {e}")
-    
-    return pd.DataFrame()
+        st.text_input(
+            "Адрес Доставки",
+            value=st.session_state.k_address,
+            key='address_input',
+            on_change=lambda: setattr(st.session_state, 'k_address', st.session_state.address_input)
+        )
 
 
-@st.cache_resource
-def get_orders_worksheet():
-    """Получение и кэширование рабочего листа для заявок."""
-    gc = get_gsheet_client()
-    if not gc:
-        return None
-    
-    try:
-        sh = gc.open(SPREADSHEET_NAME)
-        worksheet = sh.worksheet(WORKSHEET_NAME_ORDERS)
-        initialize_worksheet_headers(worksheet)
-        return worksheet
+    st.text_area(
+        "Комментарий / Примечание",
+        value=st.session_state.k_comment,
+        height=50,
+        key='comment_input',
+        on_change=lambda: setattr(st.session_state, 'k_comment', st.session_state.comment_input)
+    )
+
+
+    st.markdown("---")
+
+
+    # =========================================================
+    # КАЛЬКУЛЯТОР ЗАКАЗА
+    # =========================================================
+
+
+    st.subheader("Состав Заказа (Калькулятор)")
+
+
+    col_item, col_qty, col_add = st.columns([4, 1, 1])
+
+
+    with col_item:
+        selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty)
+
+
+    with col_qty:
+        quantity = st.number_input("Кол-во", min_value=1, step=1, value=st.session_state.new_item_qty)
+
+
+    with col_add:
+        st.markdown(" ")
+        if st.button("➕ Добавить", use_container_width=True, disabled=selected_item == price_items[0]):
+            if selected_item != price_items[0]:
+                price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
+                if not price_row.empty:
+                    price = float(price_row.iloc[0]['ЦЕНА'])
+                    st.session_state.calculator_items.append({
+                        'НАИМЕНОВАНИЕ': selected_item,
+                        'КОЛИЧЕСТВО': quantity,
+                        'ЦЕНА_ЗА_ЕД': price,
+                        'СУММА': price * quantity
+                    })
+
+
+    # Отображение товаров
+    total_sum = 0
+    if st.session_state.calculator_items:
+        df_items = pd.DataFrame(st.session_state.calculator_items)
+        total_sum = df_items['СУММА'].sum()
         
-    except gspread.exceptions.WorksheetNotFound:
-        set_critical_error(f"Лист для заявок '{WORKSHEET_NAME_ORDERS}' не найден.")
-        return None
-    except Exception as e:
-        set_critical_error(f"Ошибка доступа к листу '{WORKSHEET_NAME_ORDERS}'.", f"Ошибка: {e}")
-        return None
+        st.dataframe(
+            df_items[['НАИМЕНОВАНИЕ', 'КОЛИЧЕСТВО', 'ЦЕНА_ЗА_ЕД', 'СУММА']],
+            column_config={
+                'НАИМЕНОВАНИЕ': 'Товар',
+                'КОЛИЧЕСТВО': 'Кол-во',
+                'ЦЕНА_ЗА_ЕД': st.column_config.NumberColumn("Цена за ед.", format="%.2f РУБ."),
+                'СУММА': st.column_config.NumberColumn("Сумма", format="%.2f РУБ."),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        # Удаление позиций
+        st.markdown("##### Удаление позиций:")
+        for i in range(len(st.session_state.calculator_items) - 1, -1, -1):
+            item = st.session_state.calculator_items[i]
+            col_name, col_sum, col_del = st.columns([5, 1.5, 0.5])
+            with col_name:
+                st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕСТВО']} шт.)")
+            with col_sum:
+                st.write(f"**{item['СУММА']:,.2f} РУБ.**")
+            with col_del:
+                if st.button("❌", key=f"del_{i}"):
+                    st.session_state.calculator_items.pop(i)
+                    st.rerun()
+        
+        st.markdown(f"### 💰 **ИТОГО: {total_sum:,.2f} РУБ.**")
+    else:
+        st.info("В заказе пока нет позиций. Добавьте товар.")
+
+
+    st.markdown("---")
+
+
+    # =========================================================
+    # СОХРАНЕНИЕ ДАННЫХ
+    # =========================================================
+
+
+    st.subheader("Завершение Заявки")
+
+
+    # Проверка готовности к сохранению
+    valid_phone = is_valid_phone(st.session_state.k_client_phone)
+    is_ready_to_send = (
+        st.session_state.k_order_number and 
+        valid_phone and 
+        st.session_state.k_address and 
+        st.session_state.calculator_items
+    )
+
+
+    if not is_ready_to_send:
+        missing_fields = []
+        if not st.session_state.k_order_number:
+            missing_fields.append("Номер Заявки")
+        if not st.session_state.k_client_phone:
+            missing_fields.append("Телефон Клиента")
+        elif not valid_phone:
+            missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
+        if not st.session_state.k_address:
+            missing_fields.append("Адрес Доставки")
+        if not st.session_state.calculator_items:
+            missing_fields.append("Состав Заказа")
+        
+        if missing_fields:
+            st.error(f"❌ Заявка не готова к сохранению! Необходимо заполнить: {', '.join(missing_fields)}")
+
+
+    # Подготовка данных
+    order_details = "\n".join(
+        [f"{item['НАИМЕНОВАНИЕ']} - {item['КОЛИЧЕСТВО']} шт. (по {item['ЦЕНА_ЗА_ЕД']:,.2f} РУБ.)" 
+         for item in st.session_state.calculator_items]
+    )
+
+
+    data_to_save = [
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        st.session_state.k_order_number,
+        valid_phone,
+        st.session_state.k_address,
+        st.session_state.k_delivery_date.strftime('%Y-%m-%d'),
+        st.session_state.k_comment,
+        order_details,
+        float(total_sum) if not math.isnan(total_sum) else 0.0
+    ]
+
+
+    # Кнопка сохранения
+    if st.session_state.app_mode == 'new':
+        if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True):
+            if save_order_data(data_to_save, orders_ws):
+                st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно сохранена!"
+                # Сброс формы
+                st.session_state.k_order_number = ""
+                st.session_state.k_client_phone = ""
+                st.session_state.k_address = ""
+                st.session_state.k_comment = ""
+                st.session_state.k_delivery_date = get_default_delivery_date()
+                st.session_state.calculator_items = []
+                st.rerun()
+    else:
+        if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True):
+            if update_order_data(st.session_state.k_order_number, data_to_save, orders_ws):
+                st.session_state.last_success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно перезаписана!"
+                st.rerun()
+
+
+    # Ссылка WhatsApp
+    if is_ready_to_send:
+        whatsapp_data = {
+            'НОМЕР_ЗАЯВКИ': st.session_state.k_order_number,
+            'ТЕЛЕФОН': st.session_state.k_client_phone,
+            'АДРЕС': st.session_state.k_address,
+            'ДАТА_ДОСТАВКИ': st.session_state.k_delivery_date.strftime('%d.%m.%Y'),
+            'КОММЕНТАРИЙ': st.session_state.k_comment,
+            'ЗАКАЗ': order_details
+        }
+        
+        final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
+        whatsapp_url = generate_whatsapp_url(valid_phone, whatsapp_data, final_total_sum)
+        
+        st.markdown("---")
+        st.markdown(f"**Ссылка для подтверждения клиенту ({valid_phone}):**")
+        st.markdown(
+            f'<a href="{whatsapp_url}" target="_blank">'
+            f'<button style="background-color:#25D366;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;">'
+            f'💬 Открыть WhatsApp с Заказом'
+            f'</button></a>',
+            unsafe_allow_html=True
+        )
 
 
 # =========================================================
-# 3. ФУНКЦИЯ ЗАГРУЗКИ ДАННЫХ ДЛЯ КОРРЕКТИРОВКИ
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # =========================================================
-
-
-def load_order_data(order_number: str):
-    """Загружает данные заявки по номеру из Google Sheets."""
-    orders_ws = get_orders_worksheet()
-    if not orders_ws:
-        st.error("Не удалось подключиться к базе данных.")
-        return False
-    
-    try:
-        data = orders_ws.get_all_records()
-        df = pd.DataFrame(data)
-        
-        target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
-        
-        if target_rows.empty:
-            st.warning(f"⚠️ Заявка с номером **{order_number}** не найдена.")
-            st.session_state.k_target_row_index = None
-            return False
-        
-        # Берем ПОСЛЕДНЮЮ запись
-        row_index_in_df = target_rows.index[-1]
-        row = target_rows.iloc[-1].to_dict()
-        
-        # Сохраняем номер строки для обновления
-        gspread_row_index = row_index_in_df + 2
-        st.session_state.k_target_row_index = gspread_row_index
-        
-        # Обновляем поля формы
-        st.session_state.k_order_number = str(row.get('НОМЕР_ЗАЯВКИ', ''))
-        st.session_state.k_client_phone = str(row.get('ТЕЛЕФОН', ''))
-        st.session_state.k_address = str(row.get('АДРЕС', ''))
-        st.session_state.k_comment = str(row.get('КОММЕНТАРИЙ', ''))
-        
-        # Обновляем дату доставки
-        delivery_date_str = str(row.get('ДАТА_ДОСТАВКИ', ''))
-        try:
-            date_obj = datetime.strptime(delivery_date_str, '%Y-%m-%d').date()
-            st.session_state.k_delivery_date = date_obj
-        except (ValueError, TypeError):
-            st.session_state.k_delivery_date = get_default_delivery_date()
-        
-        # Парсим состав заказа
-        order_text = str(row.get('ЗАКАЗ', ''))
-        st.session_state.calculator_items = parse_order_text_to_items(order_text)
-        
-        st.success(f"✅ Данные заявки №**{order_number}** загружены. (Строка {gspread_row_index})")
-        return True
-        
-    except Exception as e:
-        st.error(f"Ошибка при загрузке данных заявки: {e}")
-        return False
 
 
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
@@ -332,232 +502,50 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
     return items
 
 
-# =========================================================
-# 4. ИНИЦИАЛИЗАЦИЯ SESSION STATE
-# =========================================================
-
-
-# Загружаем данные
-price_df = load_price_list()
-orders_ws = get_orders_worksheet()
-price_items = ["--- Выберите позицию ---"] + price_df['НАИМЕНОВАНИЕ'].tolist() if not price_df.empty else ["--- Прайс не загружен ---"]
-
-
-# Инициализация session_state
-if 'critical_error' not in st.session_state:
-    st.session_state.critical_error = None
-
-
-if 'app_mode' not in st.session_state:
-    st.session_state.app_mode = 'new'
-
-
-if 'mode_selector_value' not in st.session_state:
-    st.session_state.mode_selector_value = 'Новая заявка'
-
-
-if 'calculator_items' not in st.session_state:
-    st.session_state.calculator_items = []
-
-
-if 'k_target_row_index' not in st.session_state:
-    st.session_state.k_target_row_index = None
-
-
-if 'do_clear_form' not in st.session_state:
-    st.session_state.do_clear_form = False
-
-
-if 'last_success_message' not in st.session_state:
-    st.session_state.last_success_message = None
-
-
-if 'k_order_number' not in st.session_state:
-    st.session_state.k_order_number = load_last_order_number_safe()
-
-
-if 'k_order_number_input' not in st.session_state:
-    st.session_state.k_order_number_input = st.session_state.k_order_number if st.session_state.app_mode == 'new' else ""
-
-
-if 'k_client_phone' not in st.session_state:
-    st.session_state.k_client_phone = ""
-
-
-if 'k_address' not in st.session_state:
-    st.session_state.k_address = ""
-
-
-if 'k_comment' not in st.session_state:
-    st.session_state.k_comment = ""
-
-
-if 'k_delivery_date' not in st.session_state:
-    st.session_state.k_delivery_date = get_default_delivery_date()
-
-
-if 'new_item_qty' not in st.session_state:
-    st.session_state.new_item_qty = 1
-
-
-if 'parsing_log' not in st.session_state:
-    st.session_state.parsing_log = ""
-
-
-if 'conversation_text_input' not in st.session_state:
-    st.session_state.conversation_text_input = ""
-
-
-if 'new_item_select' not in st.session_state:
-    st.session_state.new_item_select = price_items[0]
-
-
-# =========================================================
-# 5. ФУНКЦИИ ЛОГИКИ (ПАРСИНГ И ЗАПИСЬ)
-# =========================================================
-
-
-def parse_conversation(text: str):
-    """Извлечение данных из текста переписки."""
-    st.session_state.parsing_log = f"--- ЛОГ ПАРСИНГА ({datetime.now().strftime('%H:%M:%S')}) ---\n"
-    
-    # Извлечение номера телефона
-    phone_matches_raw = re.findall(r'(\d{7,11})', text)
-    phone_counts = {}
-    
-    for raw_phone in phone_matches_raw:
-        normalized_phone = is_valid_phone(raw_phone)
-        if normalized_phone:
-            phone_counts[normalized_phone] = phone_counts.get(normalized_phone, 0) + 1
-    
-    if phone_counts:
-        phone = max(phone_counts.items(), key=lambda item: item[1])[0]
-        st.session_state.k_client_phone = phone
-        st.info(f"✅ Телефон клиента найден: **{phone}**")
-    
-    # Извлечение номера заявки
-    order_match = re.search(r'(?:заявк[аи]|заказ|счет|№|номер)\s*[\W]*(\d+)', text, re.IGNORECASE)
-    
-    if order_match and st.session_state.app_mode == 'edit':
-        found_order_num = order_match.group(1)
-        st.session_state.k_order_number_input = found_order_num
-        st.session_state.k_order_number = found_order_num
-        if load_order_data(found_order_num):
-            st.info(f"✅ Номер Заявки найден и установлен: {found_order_num}. Данные загружены.")
-            return
-    
-    # Извлечение даты доставки
-    delivery_date = None
-    today = datetime.today().date()
-    
-    if re.search(r'послезавтра', text, re.IGNORECASE):
-        delivery_date = today + timedelta(days=2)
-    elif re.search(r'завтра', text, re.IGNORECASE):
-        delivery_date = today + timedelta(days=1)
-    
-    if not delivery_date:
-        date_match = re.search(r'(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?', text)
-        if date_match:
-            day, month, year_str = date_match.groups()
-            current_year = today.year
-            try:
-                if year_str:
-                    year = 2000 + int(year_str) if len(year_str) == 2 else int(year_str)
-                else:
-                    year = current_year
-                delivery_date = datetime(year, int(month), int(day)).date()
-            except ValueError:
-                pass
-    
-    if delivery_date:
-        while delivery_date < today and delivery_date.year < today.year + 1:
-            delivery_date = delivery_date.replace(year=delivery_date.year + 1)
-        st.session_state.k_delivery_date = delivery_date
-        st.info(f"✅ Дата Доставки найдена: **{delivery_date.strftime('%d.%m.%Y')}**")
-    
-    st.rerun()
-
-
-def save_data_to_gsheets(data_row: List[Any], row_index: int) -> bool:
-    """Сохраняет или обновляет данные в Google Sheets."""
-    if orders_ws is None:
-        st.error("Не удалось подключиться к листу для записи данных.")
+def save_order_data(data_row: List[Any], orders_ws) -> bool:
+    """Сохраняет новую заявку"""
+    if not orders_ws:
+        st.error("Не удалось подключиться к Google Sheets")
         return False
     
     try:
-        if row_index and isinstance(row_index, int) and row_index > 1:
-            # ОБНОВЛЕНИЕ существующей строки - КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
-            # Обновляем каждую ячейку отдельно для надежности
-            for col, value in enumerate(data_row, start=1):
-                orders_ws.update_cell(row_index, col, value)
-            return True
-        else:
-            # ДОБАВЛЕНИЕ новой строки
-            orders_ws.append_row(data_row)
-            return True
-            
+        orders_ws.append_row(data_row)
+        return True
     except Exception as e:
-        st.error(f"Ошибка записи в Google Sheets: {e}")
+        st.error(f"Ошибка сохранения заявки: {e}")
         return False
 
 
-def handle_save_and_clear(data_to_save: List[Any], is_update: bool):
-    """Обработчик сохранения данных."""
-    row_index = st.session_state.k_target_row_index
+def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
+    """Обновляет существующую заявку"""
+    if not orders_ws:
+        st.error("Не удалось подключиться к Google Sheets")
+        return False
     
-    with st.spinner(f"⏳ {'Обновление' if is_update else 'Сохранение'} заявки..."):
-        if save_data_to_gsheets(data_to_save, row_index):
-            success_message = f"🎉 Заявка №{st.session_state.k_order_number} успешно {'перезаписана' if is_update else 'сохранена'}!"
-            
-            if is_update:
-                st.success(success_message)
-                # В режиме редактирования НЕ очищаем форму
-                # Сохраняем target_row_index для возможных дальнейших изменений
-            else:
-                st.session_state.last_success_message = success_message
-                st.session_state.do_clear_form = True
-
-
-# =========================================================
-# 6. ФУНКЦИИ КАЛЬКУЛЯТОРА И ИНТЕРФЕЙСА
-# =========================================================
-
-
-def add_item():
-    """Добавляет выбранный товар в список."""
-    selected_name = st.session_state.new_item_select
     try:
-        quantity = int(st.session_state.new_item_qty)
-    except ValueError:
-        st.error("Ошибка: Количество должно быть целым числом.")
-        return
-    
-    if selected_name != "--- Выберите позицию ---" and quantity > 0:
-        price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_name]
-        if price_row.empty:
-            st.error(f"Ошибка: позиция '{selected_name}' не найдена в прайс-листе.")
-            return
-            
-        price = float(price_row.iloc[0]['ЦЕНА'])
-        st.session_state.calculator_items.append({
-            'НАИМЕНОВАНИЕ': selected_name,
-            'КОЛИЧЕСТВО': quantity,
-            'ЦЕНА_ЗА_ЕД': price,
-            'СУММА': price * quantity
-        })
+        # Находим заявку по номеру
+        data = orders_ws.get_all_records()
+        df = pd.DataFrame(data)
+        target_rows = df[df['НОМЕР_ЗАЯВКИ'].astype(str) == order_number]
         
-        st.session_state.new_item_qty = 1
-        st.session_state.new_item_select = price_items[0]
-
-
-def remove_item(index: int):
-    """Удаляет позицию из списка по индексу."""
-    if 0 <= index < len(st.session_state.calculator_items):
-        st.session_state.calculator_items.pop(index)
+        if target_rows.empty:
+            st.error(f"Заявка с номером {order_number} не найдена")
+            return False
+        
+        # Берем последнюю запись и обновляем ее
+        row_index_in_df = target_rows.index[-1]
+        gspread_row_index = row_index_in_df + 2
+        
+        # Обновляем строку
+        orders_ws.update(f'A{gspread_row_index}:H{gspread_row_index}', [data_row])
+        return True
+        
+    except Exception as e:
+        st.error(f"Ошибка обновления заявки: {e}")
+        return False
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
-    """Генерирует ссылку на WhatsApp с предзаполненным текстом."""
     text = f"Здравствуйте! Пожалуйста, проверьте детали вашего заказа:\n\n"
     text += f"📋 *Номер Заявки:* {order_data['НОМЕР_ЗАЯВКИ']}\n"
     text += f"📞 *Телефон:* {order_data['ТЕЛЕФОН']}\n"
@@ -582,316 +570,5 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     return f"https://wa.me/{target_phone_final}?text={encoded_text}"
 
 
-# =========================================================
-# 7. ОСНОВНОЙ ИНТЕРФЕЙС STREAMLIT
-# =========================================================
-
-
-if st.session_state.critical_error:
-    st.error(st.session_state.critical_error)
-    st.stop()
-
-
-st.title("Ввод Новой Заявки CRM 📝")
-
-
-# Обработка очистки формы
-if st.session_state.do_clear_form:
-    if st.session_state.get('last_success_message'):
-        st.success(st.session_state.last_success_message)
-        st.session_state.last_success_message = None
-    clear_form_state()
-    st.rerun()
-
-
-# ----------------------------------------------------------------------------------------------------------------------
-## Блок Выбора Режима
-# ----------------------------------------------------------------------------------------------------------------------
-
-
-st.subheader("Выбор Режима Работы")
-
-
-st.radio(
-    "Выберите действие:",
-    options=['Новая заявка', 'Редактировать существующую'],
-    index=0 if st.session_state.app_mode == 'new' else 1,
-    key='mode_selector_value',
-    horizontal=True,
-    on_change=switch_mode
-)
-
-
-mode_text = (
-    "➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' 
-    else "🔄 **Режим Редактирования/Перезаписи**"
-)
-st.info(mode_text)
-
-
-# --- Блок Номера Заявки ---
-col_num, col_btn = st.columns([3, 1])
-
-
-with col_num:
-    st.text_input(
-        "Номер Заявки / Счёта",
-        key='k_order_number_input',
-        value=st.session_state.k_order_number if st.session_state.app_mode == 'new' else st.session_state.k_order_number_input,
-        disabled=st.session_state.app_mode == 'new',
-        help="В режиме 'Новая' номер генерируется. В режиме 'Редактировать' введите номер и нажмите кнопку."
-    )
-
-
-with col_btn:
-    st.markdown(" ")
-    if st.session_state.app_mode == 'edit':
-        if st.button("🔄 Загрузить Заявку", type="secondary", use_container_width=True):
-            st.session_state.k_order_number = st.session_state.k_order_number_input
-            load_order_data(st.session_state.k_order_number)
-    else:
-        if st.button("🧼 Очистить Форму", type="secondary", use_container_width=True):
-            st.session_state.do_clear_form = True
-
-
-# Отладочная информация
-if st.session_state.app_mode == 'edit':
-    st.info(f"Отладка: target_row_index = {st.session_state.k_target_row_index}")
-
-
-st.markdown("---")
-
-
-# --- Блок Парсинга ---
-with st.expander("🤖 Парсинг Переписки", expanded=False):
-    st.text_area(
-        "Вставьте текст переписки с клиентом:",
-        key='conversation_text_input',
-        height=150
-    )
-    
-    if st.button("🔍 Запустить Парсинг Данных", use_container_width=True):
-        if st.session_state.conversation_text_input:
-            parse_conversation(st.session_state.conversation_text_input)
-
-
-st.markdown("---")
-
-
-# ----------------------------------------------------------------------------------------------------------------------
-## Форма Ввода Основных Данных
-# ----------------------------------------------------------------------------------------------------------------------
-
-
-st.subheader("Основные Данные Заявки")
-
-
-col1, col2 = st.columns(2)
-
-
-with col1:
-    st.text_input(
-        "Номер Заявки (текущий)",
-        key='k_order_number_display',
-        value=st.session_state.k_order_number,
-        disabled=True
-    )
-    
-    st.text_input(
-        "Телефон Клиента (с 7)",
-        key='k_client_phone',
-        value=st.session_state.k_client_phone
-    )
-
-
-with col2:
-    st.date_input(
-        "Дата Доставки",
-        key='k_delivery_date',
-        value=st.session_state.k_delivery_date,
-        min_value=datetime.today().date()
-    )
-    
-    st.text_input(
-        "Адрес Доставки",
-        key='k_address',
-        value=st.session_state.k_address
-    )
-
-
-st.text_area(
-    "Комментарий / Примечание",
-    key='k_comment',
-    value=st.session_state.k_comment,
-    height=50
-)
-
-
-st.markdown("---")
-
-
-# ----------------------------------------------------------------------------------------------------------------------
-## Калькулятор Заказа
-# ----------------------------------------------------------------------------------------------------------------------
-
-
-st.subheader("Состав Заказа (Калькулятор)")
-
-
-col_item, col_qty, col_add = st.columns([4, 1, 1])
-
-
-with col_item:
-    st.selectbox(
-        "Выбор позиции",
-        price_items,
-        key='new_item_select',
-        disabled=price_df.empty
-    )
-
-
-with col_qty:
-    st.number_input(
-        "Кол-во",
-        min_value=1,
-        step=1,
-        key='new_item_qty'
-    )
-
-
-with col_add:
-    st.markdown(" ")
-    disable_add = price_df.empty or st.session_state.new_item_select == price_items[0]
-    st.button("➕ Добавить", on_click=add_item, use_container_width=True, disabled=disable_add)
-
-
-total_sum = 0
-if st.session_state.calculator_items:
-    df_items = pd.DataFrame(st.session_state.calculator_items)
-    total_sum = df_items['СУММА'].sum()
-    
-    st.dataframe(
-        df_items[['НАИМЕНОВАНИЕ', 'КОЛИЧЕСТВО', 'ЦЕНА_ЗА_ЕД', 'СУММА']],
-        column_config={
-            'НАИМЕНОВАНИЕ': 'Товар',
-            'КОЛИЧЕСТВО': 'Кол-во',
-            'ЦЕНА_ЗА_ЕД': st.column_config.NumberColumn("Цена за ед.", format="%.2f РУБ."),
-            'СУММА': st.column_config.NumberColumn("Сумма", format="%.2f РУБ."),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-    
-    st.markdown("##### Удаление позиций:")
-    for i in range(len(st.session_state.calculator_items) - 1, -1, -1):
-        item = st.session_state.calculator_items[i]
-        col_name, col_sum, col_del = st.columns([5, 1.5, 0.5])
-        with col_name:
-            st.write(f"**{item['НАИМЕНОВАНИЕ']}** ({item['КОЛИЧЕСТВО']} шт.)")
-        with col_sum:
-            st.write(f"**{item['СУММА']:,.2f} РУБ.**")
-        with col_del:
-            if st.button("❌", key=f"del_{i}", on_click=remove_item, args=(i,)):
-                st.rerun()
-    
-    st.markdown(f"### 💰 **ИТОГО: {total_sum:,.2f} РУБ.**")
-else:
-    st.info("В заказе пока нет позиций. Добавьте товар.")
-
-
-st.markdown("---")
-
-
-# ----------------------------------------------------------------------------------------------------------------------
-## Блок Отправки и Ссылок
-# ----------------------------------------------------------------------------------------------------------------------
-
-
-st.subheader("Завершение Заявки")
-
-
-valid_phone = is_valid_phone(st.session_state.k_client_phone)
-is_ready_to_send = (
-    st.session_state.k_order_number and 
-    valid_phone and 
-    st.session_state.k_address and 
-    st.session_state.calculator_items
-)
-
-
-# Проверка возможности сохранения
-can_save = is_ready_to_send
-if st.session_state.app_mode == 'edit' and not st.session_state.k_target_row_index:
-    can_save = False
-    if is_ready_to_send:
-        st.error("❌ В режиме 'Редактировать' необходимо сначала загрузить заявку по номеру.")
-
-
-order_details = "\n".join(
-    [f"{item['НАИМЕНОВАНИЕ']} - {item['КОЛИЧЕСТВО']} шт. (по {item['ЦЕНА_ЗА_ЕД']:,.2f} РУБ.)" 
-     for item in st.session_state.calculator_items]
-)
-
-
-if not is_ready_to_send and st.session_state.app_mode == 'new':
-    missing_fields = []
-    if not st.session_state.k_order_number:
-        missing_fields.append("Номер Заявки")
-    if not st.session_state.k_client_phone:
-        missing_fields.append("Телефон Клиента")
-    elif not valid_phone:
-        missing_fields.append("Телефон (неверный формат)")
-    if not st.session_state.k_address:
-        missing_fields.append("Адрес Доставки")
-    if not st.session_state.calculator_items:
-        missing_fields.append("Состав Заказа")
-    
-    if missing_fields:
-        st.error(f"❌ Заявка не готова к сохранению! Необходимо заполнить: {', '.join(missing_fields)}")
-
-
-# Подготовка данных
-is_update = bool(st.session_state.k_target_row_index)
-button_label = "💾 Перезаписать Заявку" if is_update else "💾 Сохранить Новую Заявку"
-
-
-data_to_save = [
-    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-    st.session_state.k_order_number,
-    valid_phone,
-    st.session_state.k_address,
-    st.session_state.k_delivery_date.strftime('%Y-%m-%d'),
-    st.session_state.k_comment,
-    order_details,
-    float(total_sum) if not math.isnan(total_sum) else 0.0
-]
-
-
-# Кнопка сохранения
-if st.button(button_label, disabled=not can_save, type="primary", use_container_width=True):
-    handle_save_and_clear(data_to_save, is_update)
-
-
-# Ссылка WhatsApp
-if is_ready_to_send:
-    whatsapp_data = {
-        'НОМЕР_ЗАЯВКИ': st.session_state.k_order_number,
-        'ТЕЛЕФОН': st.session_state.k_client_phone,
-        'АДРЕС': st.session_state.k_address,
-        'ДАТА_ДОСТАВКИ': st.session_state.k_delivery_date.strftime('%d.%m.%Y'),
-        'КОММЕНТАРИЙ': st.session_state.k_comment,
-        'ЗАКАЗ': order_details
-    }
-    
-    final_total_sum = float(total_sum) if not math.isnan(total_sum) else 0.0
-    whatsapp_url = generate_whatsapp_url(valid_phone, whatsapp_data, final_total_sum)
-    
-    st.markdown("---")
-    st.markdown(f"**Ссылка для подтверждения клиенту ({valid_phone}):**")
-    st.markdown(
-        f'<a href="{whatsapp_url}" target="_blank">'
-        f'<button style="background-color:#25D366;color:white;padding:10px 20px;border:none;border-radius:5px;cursor:pointer;width:100%;">'
-        f'💬 Открыть WhatsApp с Заказом'
-        f'</button></a>',
-        unsafe_allow_html=True
-    )
+if __name__ == "__main__":
+    main()
