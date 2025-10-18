@@ -808,8 +808,11 @@ def main():
             ]
 
 
+            # ИСПРАВЛЕНИЕ: Сначала сортируем, затем создаем df_for_display
+            df_display_sorted = df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT', ascending=True)
+            
             # Создаем копию DataFrame для отображения с улучшенным форматированием
-            df_for_display = df_display[display_columns].copy()
+            df_for_display = df_display_sorted[display_columns].copy()
             
             # Улучшаем отображение столбца "ЗАКАЗ" - добавляем HTML переносы строк
             df_for_display['ЗАКАЗ'] = df_for_display['ЗАКАЗ'].apply(
@@ -818,7 +821,7 @@ def main():
 
 
             st.dataframe(
-                df_for_display.sort_values(by='ДАТА_ДОСТАВКИ_DT', ascending=True),
+                df_for_display,
                 column_config={
                     "ДАТА_ВВОДА_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("Введено"),
                     "ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("🚚 Доставка"),
