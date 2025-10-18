@@ -8,6 +8,8 @@ from typing import List, Dict, Any
 import math
 
 
+
+
 # ======
 # КОНСТАНТЫ И НАСТРОЙКИ
 # ======
@@ -16,8 +18,12 @@ WORKSHEET_NAME_ORDERS = "ЗАЯВКИ"
 WORKSHEET_NAME_PRICE = "ПРАЙС"
 
 
-# Колонка в Google Sheets называется "ДАТА ДОСТАВКИ" (с пробелом)
+
+
+# ВАЖНО: Колонка в Google Sheets называется "ДАТА ДОСТАВКИ" (с пробелом)
 DELIVERY_DATE_COLUMN_NAME = "ДАТА ДОСТАВКИ" 
+
+
 
 
 EXPECTED_HEADERS = [
@@ -32,17 +38,23 @@ EXPECTED_HEADERS = [
 ]
 
 
+
+
 # Индекс столбца для сортировки/вставки: ДАТА ДОСТАВКИ (Е)
 DELIVERY_DATE_COLUMN_INDEX = 5
 
 
+
+
 MANAGER_WHATSAPP_PHONE = "79000000000"
-TIME_STEP_SECONDS = 1800 # 30 минут
+TIME_STEP_SECONDS = 1800
+
+
 
 
 # --- ФОРМАТЫ ДАТЫ ---
 # Полный формат для сохранения в Google Sheets (включая секунды)
-SHEET_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S' 
+SHEET_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
 PARSE_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
 # Формат для отображения (без секунд)
 DISPLAY_DATE_FORMAT = '%d.%m.%Y %H:%M' 
@@ -64,6 +76,8 @@ st.set_page_config(
 # ==================
 
 
+
+
 @st.cache_resource(ttl=3600)
 def get_gsheet_client():
     if "gcp_service_account" not in st.secrets:
@@ -74,6 +88,8 @@ def get_gsheet_client():
     except Exception as e:
         st.error(f"Ошибка аутентификации: {e}")
         return None
+
+
 
 
 @st.cache_resource
@@ -94,6 +110,8 @@ def get_orders_worksheet():
         return None
 
 
+
+
 @st.cache_data(ttl="1h")
 def load_all_orders():
     orders_ws = get_orders_worksheet()
@@ -109,6 +127,8 @@ def load_all_orders():
         return pd.DataFrame()
 
 
+
+
 @st.cache_data(ttl="1h")
 def load_price_list():
     gc = get_gsheet_client()
@@ -122,9 +142,13 @@ def load_price_list():
         df = pd.DataFrame(data)
 
 
+
+
         if 'НАИМЕНОВАНИЕ' not in df.columns or 'ЦЕНА' not in df.columns:
             st.error("В прайсе отсутствуют обязательные столбцы: 'НАИМЕНОВАНИЕ' или 'ЦЕНА'.")
             return pd.DataFrame()
+
+
 
 
         df['ЦЕНА'] = pd.to_numeric(df['ЦЕНА'], errors='coerce')
@@ -133,6 +157,8 @@ def load_price_list():
     except Exception as e:
         st.error(f"Ошибка загрузки прайса: {e}")
         return pd.DataFrame()
+
+
 
 
 def is_valid_phone(phone: str) -> str:
@@ -144,17 +170,25 @@ def is_valid_phone(phone: str) -> str:
     return ""
 
 
+
+
 def get_default_delivery_date():
     return datetime.today().date() + timedelta(days=1)
+
+
 
 
 def get_default_delivery_time():
     return time(10, 0)
 
 
+
+
 # ======
 # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (Логика приложения)
 # ===================
+
+
 
 
 def generate_next_order_number():
@@ -172,10 +206,14 @@ def generate_next_order_number():
         return "1001"
 
 
+
+
 def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
     items = []
     # Паттерн: Наименование - Количество шт. (по Цена РУБ.) | Комментарий
     pattern = re.compile(r'(.+?) - (\d+)\s*шт\.\s*\(по\s*([\d\s,.]+)\s*РУБ\.\)(?:\s*\|\s*(.*))?')
+
+
 
 
     for line in order_text.split('\n'):
@@ -198,6 +236,8 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
                 price_per_unit = 0.0
 
 
+
+
             items.append({
                 'НАИМЕНОВАНИЕ': name,
                 'КОЛИЧЕСТВО': qty,
@@ -207,6 +247,8 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
                 'КОММЕНТАРИЙ_ПОЗИЦИИ': comment
             })
     return items
+
+
 
 
 def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
@@ -227,6 +269,8 @@ def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
         return 2
 
 
+
+
     for i, date_str in enumerate(data_col):
         try:
             # Парсим существующие даты в полном формате
@@ -238,6 +282,8 @@ def get_insert_index(new_delivery_date_str: str, orders_ws) -> int:
             continue
             
     return len(data_col) + 2
+
+
 
 
 def save_order_data(data_row: List[Any], orders_ws) -> bool:
@@ -254,6 +300,8 @@ def save_order_data(data_row: List[Any], orders_ws) -> bool:
         return False
 
 
+
+
 def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool:
     if not orders_ws: return False
     try:
@@ -268,9 +316,13 @@ def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool
                 break
 
 
+
+
         if target_gspread_row_index == -1:
             st.error(f"Заявка с номером {order_number} не найдена в таблице.")
             return False
+
+
 
 
         orders_ws.update(f'A{target_gspread_row_index}:H{target_gspread_row_index}',
@@ -281,6 +333,8 @@ def update_order_data(order_number: str, data_row: List[Any], orders_ws) -> bool
     except Exception as e:
         st.error(f"Ошибка обновления заявки: {e}")
         return False
+
+
 
 
 def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_sum: float) -> str:
@@ -305,6 +359,8 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
         target_phone_final = normalized_phone
         
     return f"https://wa.me/{target_phone_final}?text={encoded_text}"
+
+
 
 
 def format_datetime_for_display(dt_str):
@@ -953,11 +1009,11 @@ def main():
 
 
             # 3. Визуально красивый вывод с исправленными датами
-            # ИСПРАВЛЕНО: 'ЗАКАЗ_HTML' заменено на 'ЗАКАЗ'
+            # ✅ ИСПРАВЛЕНИЕ: Заменено 'ЗАКАЗ_HTML' на 'ЗАКАЗ'
             display_columns = [
                 'ДАТА_ВВОДА_ОТОБРАЖЕНИЕ', 'НОМЕР_ЗАЯВКИ', 'ТЕЛЕФОН', 'АДРЕС',
          
-                'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ', 'СУММА' # <-- ИСПРАВЛЕНИЕ
+                'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ', 'СУММА' # <-- ИСПРАВЛЕНО
             ]
             
             st.dataframe(
@@ -972,7 +1028,7 @@ def main():
                     "АДРЕС": st.column_config.TextColumn("📍 Адрес", width="large"),
                     "ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("️🚚 Доставка", width="medium"),
                     "КОММЕНТАРИЙ": st.column_config.TextColumn("📝 Общий комм.", width="medium"),
-                    "ЗАКАЗ": st.column_config.Column("🛒 Состав Заказа", width="large", is_html=True), # <-- ИСПРАВЛЕНИЕ
+                    "ЗАКАЗ": st.column_config.Column("🛒 Состав Заказа", width="large", is_html=True), # <-- ИСПРАВЛЕНО
                   
                     "СУММА": st.column_config.NumberColumn("💰 Сумма", format="%.2f РУБ.", width="small")
                 },
