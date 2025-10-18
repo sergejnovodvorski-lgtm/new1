@@ -26,7 +26,7 @@ EXPECTED_HEADERS = [
 ]
 # Индекс столбца для сортировки/вставки: ДАТА_ДОСТАВКИ (E)
 DELIVERY_DATE_COLUMN_INDEX = 5
-MANAGER_WHATSAPP_PHONE = "79000000000"
+MANAGER_WHITSAPP_PHONE = "79000000000"
 TIME_STEP_SECONDS = 1800 
 
 
@@ -282,8 +282,8 @@ def main():
         st.session_state.form_reset_trigger = False
     if 'loaded_order_data' not in st.session_state:
         st.session_state.loaded_order_data = None
-    if 'order_loaded' not in st.session_state:
-        st.session_state.order_loaded = False
+    if 'form_key' not in st.session_state:
+        st.session_state.form_key = 0
 
 
     # Обработка сброса формы
@@ -294,7 +294,7 @@ def main():
         st.session_state.calculator_items = []
         st.session_state.last_success_message = None
         st.session_state.loaded_order_data = None
-        st.session_state.order_loaded = False
+        st.session_state.form_key += 1  # Изменяем ключ формы для принудительного сброса
         st.rerun()
 
 
@@ -337,13 +337,13 @@ def main():
             st.session_state.app_mode = 'new'
             st.session_state.calculator_items = []
             st.session_state.loaded_order_data = None
-            st.session_state.order_loaded = False
+            st.session_state.form_key += 1
             st.rerun()
         elif mode == 'Редактировать существующую' and st.session_state.app_mode != 'edit':
             st.session_state.app_mode = 'edit'
             st.session_state.calculator_items = []
             st.session_state.loaded_order_data = None
-            st.session_state.order_loaded = False
+            st.session_state.form_key += 1
             st.rerun()
             
         st.info("➕ **Режим Создания Новой Заявки**" if st.session_state.app_mode == 'new' else "🔄 **Режим Редактирования/Перезаписи**")
@@ -384,7 +384,7 @@ def main():
                             
                             # Загружаем товары в калькулятор
                             st.session_state.calculator_items = st.session_state.loaded_order_data['calculator_items']
-                            st.session_state.order_loaded = True
+                            st.session_state.form_key += 1  # Изменяем ключ формы для принудительного обновления
                             
                             st.success(f"✅ Заявка №{search_number} загружена для редактирования.")
                             st.rerun()
@@ -401,10 +401,10 @@ def main():
         # ОСНОВНАЯ ФОРМА (ИСПРАВЛЕННАЯ ВЕРСИЯ)
         # =========================================================
         st.subheader("Основные Данные Заявки")
-        col1, col2 = st.columns(2)
-        col3, col4 = st.columns(2)
-
-
+        
+        # Используем ключ формы для принудительного обновления виджетов
+        form_key = st.session_state.form_key
+        
         # Определяем начальные значения для полей формы
         if st.session_state.app_mode == 'new':
             default_order_number = generate_next_order_number()
@@ -415,7 +415,7 @@ def main():
             default_delivery_time = get_default_delivery_time()
         else:
             # В режиме редактирования используем данные из загруженной заявки или пустые значения
-            if st.session_state.order_loaded and st.session_state.loaded_order_data:
+            if st.session_state.loaded_order_data:
                 default_order_number = st.session_state.loaded_order_data.get('order_number', '')
                 default_client_phone = st.session_state.loaded_order_data.get('client_phone', '')
                 default_address = st.session_state.loaded_order_data.get('address', '')
@@ -431,14 +431,31 @@ def main():
                 default_delivery_time = get_default_delivery_time()
 
 
+        col1, col2 = st.columns(2)
+        col3, col4 = st.columns(2)
+
+
         with col1:
             if st.session_state.app_mode == 'new':
-                order_number = st.text_input("Номер Заявки", value=default_order_number, disabled=True, key='display_order_number')
+                order_number = st.text_input(
+                    "Номер Заявки", 
+                    value=default_order_number, 
+                    disabled=True, 
+                    key=f'display_order_number_{form_key}'
+                )
             else:
-                order_number = st.text_input("Номер Заявки", value=default_order_number, key='order_number_edit')
+                order_number = st.text_input(
+                    "Номер Заявки", 
+                    value=default_order_number, 
+                    key=f'order_number_edit_{form_key}'
+                )
         
         with col2:
-            client_phone = st.text_input("Телефон Клиента (с 7)", value=default_client_phone, key='client_phone')
+            client_phone = st.text_input(
+                "Телефон Клиента (с 7)", 
+                value=default_client_phone, 
+                key=f'client_phone_{form_key}'
+            )
 
 
         # --- Поля для даты и времени ---
@@ -447,7 +464,7 @@ def main():
                 "Дата Доставки", 
                 value=default_delivery_date, 
                 min_value=datetime.today().date(), 
-                key='delivery_date', 
+                key=f'delivery_date_{form_key}', 
                 format="DD.MM.YYYY"
             )
         
@@ -456,16 +473,20 @@ def main():
                 "Время Доставки (интервал 30 мин)",
                 value=default_delivery_time, 
                 step=TIME_STEP_SECONDS,
-                key='delivery_time'
+                key=f'delivery_time_{form_key}'
             )
             
         # --- Поле адреса и комментария ---
-        address = st.text_input("Адрес Доставки", value=default_address, key='address')
+        address = st.text_input(
+            "Адрес Доставки", 
+            value=default_address, 
+            key=f'address_{form_key}'
+        )
         comment = st.text_area(
             "Комментарий / Примечание к заказу (общий)", 
             value=default_comment,
             height=50, 
-            key='comment'
+            key=f'comment_{form_key}'
         )
         st.markdown("---")
 
@@ -481,14 +502,19 @@ def main():
         
         col_item, col_qty = st.columns([5, 1])
         with col_item:
-            selected_item = st.selectbox("Выбор позиции", price_items, disabled=price_df.empty, key='item_selector')
+            selected_item = st.selectbox(
+                "Выбор позиции", 
+                price_items, 
+                disabled=price_df.empty, 
+                key=f'item_selector_{form_key}'
+            )
         with col_qty:
             current_qty = st.number_input(
                 "Кол-во", 
                 min_value=1, 
                 step=1, 
                 value=1,
-                key='item_qty'
+                key=f'item_qty_{form_key}'
             )
         
         # ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
@@ -497,7 +523,7 @@ def main():
             current_comment = st.text_input(
                 "Комментарий к позиции",
                 value="",
-                key='item_comment'
+                key=f'item_comment_{form_key}'
             )
         
         with col_add:
@@ -506,7 +532,7 @@ def main():
                 "➕ Добавить", 
                 use_container_width=True, 
                 disabled=selected_item == price_items[0],
-                key='add_item_button'
+                key=f'add_item_button_{form_key}'
             ):
                 if selected_item != price_items[0]:
                     price_row = price_df[price_df['НАИМЕНОВАНИЕ'] == selected_item]
@@ -557,7 +583,7 @@ def main():
                 with col_sum:
                     st.write(f"**{item['СУММА']:,.2f} РУБ.**")
                 with col_del:
-                    if st.button("❌", key=f"del_{i}"):
+                    if st.button("❌", key=f"del_{i}_{form_key}"):
                         st.session_state.calculator_items.pop(i)
                         st.rerun()
 
@@ -631,20 +657,19 @@ def main():
         col_save1, col_save2 = st.columns(2)
         with col_save1:
             if st.session_state.app_mode == 'new':
-                if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='save_new_order'):
+                if st.button("💾 Сохранить Новую Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key=f'save_new_order_{form_key}'):
                     if save_order_data(data_to_save, orders_ws):
                         st.session_state.last_success_message = f"🎉 Заявка №{order_number} успешно сохранена!"
                         st.session_state.form_reset_trigger = True
             else:
-                if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key='update_order'):
+                if st.button("💾 Перезаписать Заявку", disabled=not is_ready_to_send, type="primary", use_container_width=True, key=f'update_order_{form_key}'):
                     if update_order_data(order_number, data_to_save, orders_ws):
                         st.session_state.last_success_message = f"🎉 Заявка №{order_number} успешно перезаписана!"
                         st.session_state.loaded_order_data = None
-                        st.session_state.order_loaded = False
                         st.rerun()
         
         with col_save2:
-            if st.button("🔄 Очистить форму", use_container_width=True, key='clear_form'):
+            if st.button("🔄 Очистить форму", use_container_width=True, key=f'clear_form_{form_key}'):
                 st.session_state.form_reset_trigger = True
                 st.rerun()
 
