@@ -21,7 +21,7 @@ EXPECTED_HEADERS = [
     "НОМЕР_ЗАЯВКИ",
     "ТЕЛЕФОН",
     "АДРЕС",
-    "ДАТА ДОСТАВКИ", # Ключевая колонка с пробелом, как в заголовке
+    "ДАТА ДОСТАВКИ", 
     "КОММЕНТАРИЙ",
     "ЗАКАЗ",
     "СУММА"
@@ -41,7 +41,8 @@ TIME_STEP_SECONDS = 1800
 SHEET_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
 DISPLAY_DATETIME_FORMAT = 'DD.MM.YYYY HH:mm'
 PARSE_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
-DISPLAY_DATE_FORMAT = '%d.%m.%Y %H:%М' # Формат для отображения без секунд
+# ✅ КОРРЕКТИРОВКА 1: Исправлено '%М' на '%M'
+DISPLAY_DATE_FORMAT = '%d.%m.%Y %H:%M' 
 
 
 st.set_page_config(
@@ -78,7 +79,6 @@ def get_orders_worksheet():
         worksheet = sh.worksheet(WORKSHEET_NAME_ORDERS)
         current_headers = worksheet.row_values(1)
         if current_headers != EXPECTED_HEADERS:
-            # Обновление заголовков
             worksheet.update('A1:H1', [EXPECTED_HEADERS])
         return worksheet
     except Exception as e:
@@ -92,7 +92,6 @@ def load_all_orders():
     if not orders_ws:
         return pd.DataFrame()
     try:
-        # Загружаем данные без трансформации заголовков, как они есть в таблице
         data = orders_ws.get_all_records()
         df = pd.DataFrame(data)
         return df
@@ -174,10 +173,8 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
             qty = int(match.group(2))
             price_str_raw = match.group(3)
             
-            # ✅ КОРРЕКТИРОВКА 2: Более надежный парсинг цены
-            # Убираем пробелы и заменяем запятую на точку для правильного парсинга float
+            # Корректировка: Более надежный парсинг цены
             price_str_cleaned = price_str_raw.replace(' ', "").replace(',', '.')
-            # Оставляем только цифры и точку
             price_str = re.sub(r'[^\d.]', '', price_str_cleaned)
             
             comment = match.group(4).strip() if match.group(4) else ""
@@ -267,7 +264,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     text += f"*Номер Заявки:* {order_data['НОМЕР_ЗАЯВКИ']}\n"
     text += f"*Телефон:* {order_data['ТЕЛЕФОН']}\n"
     text += f"*Адрес:* {order_data['АДРЕС']}\n"
-    text += f"*Дата и Время Доставки:* {order_data[DELIVERY_DATE_COLUMN_NAME]}\n" # Используем константу
+    text += f"*Дата и Время Доставки:* {order_data[DELIVERY_DATE_COLUMN_NAME]}\n" 
     if order_data.get('КОММЕНТАРИЙ'):
         text += f"*Комментарий к заказу (общий):* {order_data['КОММЕНТАРИЙ']}\n"
     
@@ -288,7 +285,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
 def format_datetime_for_display(dt_str):
     """Форматирует дату-время для отображения"""
     if not isinstance(dt_str, str):
-        return str(dt_str) # Если не строка, возвращаем как есть
+        return str(dt_str) 
         
     try:
         # Пробуем распарсить в формате сохранения
@@ -328,12 +325,11 @@ def main():
     # Обработка сброса формы
     if st.session_state.form_reset_trigger:
         st.session_state.form_reset_trigger = False
-        # Устанавливаем значения по умолчанию для новой формы
         st.session_state.app_mode = 'new'
         st.session_state.calculator_items = []
         st.session_state.last_success_message = None
         st.session_state.loaded_order_data = None
-        st.session_state.form_key += 1 # Изменяем ключ формы для принудительного сброса
+        st.session_state.form_key += 1 
         st.rerun()
 
 
@@ -373,7 +369,6 @@ def main():
         )
 
 
-        # Логика переключения режимов
         if mode == 'Новая заявка' and st.session_state.app_mode != 'new':
             st.session_state.app_mode = 'new'
             st.session_state.calculator_items = []
@@ -410,19 +405,16 @@ def main():
                             row = target_rows.iloc[-1].to_dict()
 
 
-                            # Сохраняем данные найденной заявки в session_state
                             st.session_state.loaded_order_data = {
                                 'order_number': str(row.get('НОМЕР_ЗАЯВКИ', "")),
                                 'client_phone': str(row.get('ТЕЛЕФОН', "")),
                                 'address': str(row.get('АДРЕС', "")),
                                 'comment': str(row.get('КОММЕНТАРИЙ', "")),
-                                # Парсим текст заказа и загружаем его в калькулятор
                                 'calculator_items': parse_order_text_to_items(str(row.get('ЗАКАЗ', "")))
                             }
 
 
-                            # Обработка даты доставки
-                            delivery_dt_str = str(row.get(DELIVERY_DATE_COLUMN_NAME, "")) # Используем константу
+                            delivery_dt_str = str(row.get(DELIVERY_DATE_COLUMN_NAME, "")) 
                             try:
                                 dt_obj = datetime.strptime(delivery_dt_str, PARSE_DATETIME_FORMAT)
                                 st.session_state.loaded_order_data['delivery_date'] = dt_obj.date()
@@ -432,11 +424,10 @@ def main():
                                 st.session_state.loaded_order_data['delivery_time'] = get_default_delivery_time()
 
 
-                            # Загружаем товары в калькулятор
                             st.session_state.calculator_items = st.session_state.loaded_order_data['calculator_items']
 
 
-                            st.session_state.form_key += 1 # Изменяем ключ формы для принудительного обновления
+                            st.session_state.form_key += 1 
                             st.success(f"Заявка №{search_number} загружена для редактирования.")
                             st.rerun()
                         else:
@@ -453,10 +444,8 @@ def main():
         # ====================
         st.subheader("Основные Данные Заявки")
         
-        # Используем ключ формы для принудительного обновления виджетов
         form_key = st.session_state.form_key
         
-        # Определяем начальные значения для полей формы
         if st.session_state.app_mode == 'new':
             default_order_number = generate_next_order_number()
             default_client_phone = ""
@@ -486,18 +475,12 @@ def main():
 
 
         with col1:
-            if st.session_state.app_mode == 'new':
-                order_number = st.text_input(
-                    "Номер Заявки",
-                    value=default_order_number,
-                    key=f'order_number_new_{form_key}'
-                )
-            else:
-                order_number = st.text_input(
-                    "Номер Заявки",
-                    value=default_order_number,
-                    key=f'order_number_edit_{form_key}'
-                )
+            order_number = st.text_input(
+                "Номер Заявки",
+                value=default_order_number,
+                key=f'order_number_{st.session_state.app_mode}_{form_key}',
+                disabled=(st.session_state.app_mode == 'edit') and st.session_state.loaded_order_data is not None # Можно сделать disabled
+            )
                 
         with col2:
             client_phone = st.text_input(
@@ -507,7 +490,6 @@ def main():
             )
 
 
-        # --- Поля для даты и времени
         with col3:
             delivery_date = st.date_input(
                 "Дата Доставки",
@@ -527,7 +509,6 @@ def main():
             )
 
 
-        # --- Поле адреса и комментария
         address = st.text_input(
             "Адрес Доставки",
             value=default_address,
@@ -572,7 +553,6 @@ def main():
                 key=f'item_qty_{form_key}'
             )
         
-        # ПОЛЕ КОММЕНТАРИЯ К ПОЗИЦИИ
         col_comment, col_add = st.columns([5, 1])
         
         with col_comment:
@@ -659,11 +639,9 @@ def main():
         st.subheader("Завершение Заявки")
 
 
-        # Проверяем валидность телефона
         client_phone_value = st.session_state.get(f'client_phone_{form_key}', default_client_phone)
         valid_phone = is_valid_phone(client_phone_value)
         
-        # Проверяем готовность к отправке
         is_ready_to_send = (
             order_number and
             valid_phone and
@@ -683,7 +661,6 @@ def main():
                 st.error(f"❌ Заявка не готова к сохранению! Необходимо заполнить: {', '.join(missing_fields)}")
 
 
-        # Подготовка данных (Форматирование заказа с комментарием позиции)
         def format_order_item(item):
             # Формат сохранения: Наименование - Кол-во шт. (по Цена РУБ.) | Комментарий
             base = f"{item['НАИМЕНОВАНИЕ']} - {item['КОЛИЧЕСТВО']} шт. (по {item['ЦЕНА_ЗА_ЕД']:,.2f} РУБ.)"
@@ -711,7 +688,6 @@ def main():
             float(total_sum) if not math.isnan(total_sum) else 0.0 # 7. СУММА
         ]
         
-        # Кнопка сохранения
         col_save1, col_save2 = st.columns(2)
         with col_save1:
             if st.session_state.app_mode == 'new':
@@ -739,7 +715,7 @@ def main():
                 'НОМЕР_ЗАЯВКИ': order_number,
                 'ТЕЛЕФОН': valid_phone,
                 'АДРЕС': address,
-                DELIVERY_DATE_COLUMN_NAME: delivery_datetime.strftime('%d.%m.%Y %H:%M'), # Используем константу
+                DELIVERY_DATE_COLUMN_NAME: delivery_datetime.strftime('%d.%m.%Y %H:%M'), 
                 'КОММЕНТАРИЙ': comment,
                 'ЗАКАЗ': order_details
             }
@@ -763,7 +739,6 @@ def main():
         st.header("📋 Просмотр и Поиск Заявок")
 
 
-        # 1. Загрузка данных
         all_orders_df = load_all_orders()
 
 
@@ -773,27 +748,17 @@ def main():
             df_display = all_orders_df.copy()
 
 
-            # Преобразуем номера заявок в строки
             df_display['НОМЕР_ЗАЯВКИ'] = df_display['НОМЕР_ЗАЯВКИ'].astype(str)
-
-
-            # Обрабатываем суммы
             df_display['СУММА'] = pd.to_numeric(df_display['СУММА'], errors='coerce').fillna(0)
 
 
-            # Форматируем даты для отображения
             df_display['ДАТА_ВВОДА_ОТОБРАЖЕНИЕ'] = df_display['ДАТА_ВВОДА'].apply(format_datetime_for_display)
-            
-            # ✅ КОРРЕКТИРОВКА 3: Исправлена ошибка KeyError - используется DELIVERY_DATE_COLUMN_NAME
             df_display['ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ'] = df_display[DELIVERY_DATE_COLUMN_NAME].apply(format_datetime_for_display)
 
 
-            # Создаем datetime столбцы для сортировки
             try:
-                 # ✅ КОРРЕКТИРОВКА 3: Исправлена ошибка KeyError
                 df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], format=PARSE_DATETIME_FORMAT, errors='coerce')
             except:
-                # ✅ КОРРЕКТИРОВКА 3: Исправлена ошибка KeyError
                 df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], errors='coerce')
 
 
@@ -818,10 +783,24 @@ def main():
                 'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ', 'СУММА'
             ]
             
-            # ✅ КОРРЕКТИРОВКА 1: st.table для переноса строк
-            st.table(
+            # ✅ КОРРЕКТИРОВКА 2: Возвращено st.dataframe для поддержки настройки ширины и улучшенного переноса текста
+            st.dataframe(
                 df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT',
-                                       ascending=True)[display_columns]
+                                       ascending=True)[display_columns],
+                column_config={
+                    'ДАТА_ВВОДА_ОТОБРАЖЕНИЕ': st.column_config.Column("Ввод", width="small"),
+                    'НОМЕР_ЗАЯВКИ': st.column_config.Column("№ Заявки", width="small"),
+                    # ✅ КОРРЕКТИРОВКА 3: Расширено поле ТЕЛЕФОН
+                    'ТЕЛЕФОН': st.column_config.Column("Телефон", width="medium"), 
+                    'АДРЕС': st.column_config.Column("Адрес", width="large"),
+                    'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ': st.column_config.Column("Доставка", width="medium"),
+                    'КОММЕНТАРИЙ': st.column_config.Column("Общий комм.", width="medium"),
+                    # Установлена большая ширина для ЗАКАЗ для улучшения переноса текста
+                    'ЗАКАЗ': st.column_config.Column("Заказ (Позиции)", width="large"), 
+                    'СУММА': st.column_config.NumberColumn("СУММА", format="%.2f РУБ.", width="small")
+                },
+                hide_index=True,
+                use_container_width=True
             )
 
 
