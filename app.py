@@ -776,7 +776,7 @@ def main():
                 df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], errors='coerce')
             
             # Заменяем \n на HTML-тег <br> для переноса строк в ячейке ЗАКАЗ
-            df_display['ЗАКАЗ_HTML'] = df_display['ЗАКАЗ'].str.replace('\n', '<br>', regex=False)
+            df_display['ЗАКАЗ'] = df_display['ЗАКАЗ'].str.replace('\n', '<br>', regex=False)
 
 
 
@@ -812,7 +812,7 @@ def main():
                     "АДРЕС": st.column_config.TextColumn("📍 Адрес", width="large"),
                     "ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("️🚚 Доставка", width="medium"),
                     "КОММЕНТАРИЙ": st.column_config.TextColumn("📝 Общий комм.", width="medium"),
-                    "ЗАКАЗ_HTML": st.column_config.Column("🛒 Состав Заказа", width="large", is_html=True), 
+                    "ЗАКАЗ": st.column_config.Column("🛒 Состав Заказа", width="large", is_html=True), 
                     "СУММА": st.column_config.NumberColumn("💰 Сумма", format="%.2f РУБ.", width="small")
                 },
                 hide_index=True,
