@@ -21,14 +21,15 @@ EXPECTED_HEADERS = [
     "НОМЕР_ЗАЯВКИ",
     "ТЕЛЕФОН",
     "АДРЕС",
-    "ДАТА ДОСТАВКИ",
+    "ДАТА ДОСТАВКИ", # Ключевая колонка с пробелом, как в заголовке
     "КОММЕНТАРИЙ",
     "ЗАКАЗ",
     "СУММА"
 ]
+DELIVERY_DATE_COLUMN_NAME = "ДАТА ДОСТАВКИ" # Используем это имя везде
 
 
-# Индекс столбца для сортировки/вставки: ДАТА_ДОСТАВКИ (Е)
+# Индекс столбца для сортировки/вставки: ДАТА ДОСТАВКИ (Е)
 DELIVERY_DATE_COLUMN_INDEX = 5
 
 
@@ -77,7 +78,8 @@ def get_orders_worksheet():
         worksheet = sh.worksheet(WORKSHEET_NAME_ORDERS)
         current_headers = worksheet.row_values(1)
         if current_headers != EXPECTED_HEADERS:
-            worksheet.update('A1', [EXPECTED_HEADERS])
+            # Обновление заголовков
+            worksheet.update('A1:H1', [EXPECTED_HEADERS])
         return worksheet
     except Exception as e:
         st.error(f"Ошибка доступа к листу '{WORKSHEET_NAME_ORDERS}': {e}")
@@ -90,6 +92,7 @@ def load_all_orders():
     if not orders_ws:
         return pd.DataFrame()
     try:
+        # Загружаем данные без трансформации заголовков, как они есть в таблице
         data = orders_ws.get_all_records()
         df = pd.DataFrame(data)
         return df
@@ -110,10 +113,6 @@ def load_price_list():
         df = pd.DataFrame(data)
 
 
-        # Обработка названий колонок (ПРАЙС)
-        # В вашем коде в load_price_list ожидаются колонки 'НАИМЕНОВАНИЕ' и 'ЦЕНА'
-        # А в parse_order_text_to_items цена берется из текста, а не из прайса.
-        # Для калькулятора (где используются названия) колонки верны: 'НАИМЕНОВАНИЕ' и 'ЦЕНА'
         if 'НАИМЕНОВАНИЕ' not in df.columns or 'ЦЕНА' not in df.columns:
             st.error("В прайсе отсутствуют обязательные столбцы: 'НАИМЕНОВАНИЕ' или 'ЦЕНА'.")
             return pd.DataFrame()
@@ -128,7 +127,7 @@ def load_price_list():
 
 
 def is_valid_phone(phone: str) -> str:
-    normalized = re.sub(r'\D', '', phone) # Фикс: заменена запятая на пустую строку
+    normalized = re.sub(r'\D', '', phone)
     if normalized.startswith('8') and len(normalized) == 11:
         normalized = '7' + normalized[1:]
     if len(normalized) == 11 and normalized.startswith('7'):
@@ -173,20 +172,20 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
         if match:
             name = match.group(1).strip()
             qty = int(match.group(2))
-            price_str = match.group(3).replace(' ', "").replace(',', '.')
+            price_str_raw = match.group(3)
             
-            # ✅ КОРРЕКТИРОВКА: Более надежный парсинг цены
-            # Убедимся, что остались только цифры и точка.
-            price_str = re.sub(r'[^\d.]', '', price_str)
+            # ✅ КОРРЕКТИРОВКА 2: Более надежный парсинг цены
+            # Убираем пробелы и заменяем запятую на точку для правильного парсинга float
+            price_str_cleaned = price_str_raw.replace(' ', "").replace(',', '.')
+            # Оставляем только цифры и точку
+            price_str = re.sub(r'[^\d.]', '', price_str_cleaned)
             
             comment = match.group(4).strip() if match.group(4) else ""
             
             try:
                 price_per_unit = float(price_str)
             except ValueError:
-                price_per_unit = 0.0 # Оставим 0.0, если не удалось распарсить
-                # st.warning(f"Не удалось распарсить цену '{match.group(3)}'. Установлено 0.") 
-                # ^ Можно добавить для отладки
+                price_per_unit = 0.0 
 
 
             items.append({
@@ -268,7 +267,7 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
     text += f"*Номер Заявки:* {order_data['НОМЕР_ЗАЯВКИ']}\n"
     text += f"*Телефон:* {order_data['ТЕЛЕФОН']}\n"
     text += f"*Адрес:* {order_data['АДРЕС']}\n"
-    text += f"*Дата и Время Доставки:* {order_data['ДАТА_ДОСТАВКИ']}\n"
+    text += f"*Дата и Время Доставки:* {order_data[DELIVERY_DATE_COLUMN_NAME]}\n" # Используем константу
     if order_data.get('КОММЕНТАРИЙ'):
         text += f"*Комментарий к заказу (общий):* {order_data['КОММЕНТАРИЙ']}\n"
     
@@ -288,6 +287,9 @@ def generate_whatsapp_url(target_phone: str, order_data: Dict[str, str], total_s
 
 def format_datetime_for_display(dt_str):
     """Форматирует дату-время для отображения"""
+    if not isinstance(dt_str, str):
+        return str(dt_str) # Если не строка, возвращаем как есть
+        
     try:
         # Пробуем распарсить в формате сохранения
         dt = datetime.strptime(dt_str, PARSE_DATETIME_FORMAT)
@@ -420,7 +422,7 @@ def main():
 
 
                             # Обработка даты доставки
-                            delivery_dt_str = str(row.get('ДАТА_ДОСТАВКИ', ""))
+                            delivery_dt_str = str(row.get(DELIVERY_DATE_COLUMN_NAME, "")) # Используем константу
                             try:
                                 dt_obj = datetime.strptime(delivery_dt_str, PARSE_DATETIME_FORMAT)
                                 st.session_state.loaded_order_data['delivery_date'] = dt_obj.date()
@@ -463,7 +465,6 @@ def main():
             default_delivery_date = get_default_delivery_date()
             default_delivery_time = get_default_delivery_time()
         else:
-            # В режиме редактирования используем данные из загруженной заявки или пустые значения
             if st.session_state.loaded_order_data:
                 default_order_number = st.session_state.loaded_order_data.get('order_number', "")
                 default_client_phone = st.session_state.loaded_order_data.get('client_phone', "")
@@ -495,11 +496,9 @@ def main():
                 order_number = st.text_input(
                     "Номер Заявки",
                     value=default_order_number,
-                    disabled=True,
-                    key=f'display_order_number_form_key'
+                    key=f'order_number_edit_{form_key}'
                 )
-
-
+                
         with col2:
             client_phone = st.text_input(
                 "Телефон Клиента (с 7)",
@@ -551,7 +550,6 @@ def main():
         # =========================================================
         st.subheader("Состав Заказа (Калькулятор)")
         
-        # Используем временные переменные вместо прямого изменения session_state
         current_qty = 1
         current_comment = ""
         
@@ -707,7 +705,7 @@ def main():
             order_number,       # 1. НОМЕР_ЗАЯВКИ
             valid_phone,        # 2. ТЕЛЕФОН
             address,            # 3. АДРЕС
-            delivery_datetime_str, # 4. ДАТА_ДОСТАВКИ (используется для сортировки)
+            delivery_datetime_str, # 4. ДАТА ДОСТАВКИ
             comment,            # 5. КОММЕНТАРИЙ (Общий к заказу)
             order_details,      # 6. ЗАКАЗ (Включает комментарии позиций)
             float(total_sum) if not math.isnan(total_sum) else 0.0 # 7. СУММА
@@ -739,9 +737,9 @@ def main():
         if is_ready_to_send:
             whatsapp_data = {
                 'НОМЕР_ЗАЯВКИ': order_number,
-                'ТЕЛЕФОН': client_phone_value,
+                'ТЕЛЕФОН': valid_phone,
                 'АДРЕС': address,
-                'ДАТА_ДОСТАВКИ': delivery_datetime.strftime('%d.%m.%Y %H:%M'),
+                DELIVERY_DATE_COLUMN_NAME: delivery_datetime.strftime('%d.%m.%Y %H:%M'), # Используем константу
                 'КОММЕНТАРИЙ': comment,
                 'ЗАКАЗ': order_details
             }
@@ -785,14 +783,18 @@ def main():
 
             # Форматируем даты для отображения
             df_display['ДАТА_ВВОДА_ОТОБРАЖЕНИЕ'] = df_display['ДАТА_ВВОДА'].apply(format_datetime_for_display)
-            df_display['ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ'] = df_display['ДАТА_ДОСТАВКИ'].apply(format_datetime_for_display)
+            
+            # ✅ КОРРЕКТИРОВКА 3: Исправлена ошибка KeyError - используется DELIVERY_DATE_COLUMN_NAME
+            df_display['ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ'] = df_display[DELIVERY_DATE_COLUMN_NAME].apply(format_datetime_for_display)
 
 
             # Создаем datetime столбцы для сортировки
             try:
-                df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display['ДАТА_ДОСТАВКИ'], format=PARSE_DATETIME_FORMAT, errors='coerce')
+                 # ✅ КОРРЕКТИРОВКА 3: Исправлена ошибка KeyError
+                df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], format=PARSE_DATETIME_FORMAT, errors='coerce')
             except:
-                df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display['ДАТА_ДОСТАВКИ'], errors='coerce')
+                # ✅ КОРРЕКТИРОВКА 3: Исправлена ошибка KeyError
+                df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], errors='coerce')
 
 
             # 2. Поиск и фильтрация
@@ -816,7 +818,7 @@ def main():
                 'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ', 'СУММА'
             ]
             
-            # ✅ КОРРЕКТИРОВКА: Замена st.dataframe на st.table для переноса строк
+            # ✅ КОРРЕКТИРОВКА 1: st.table для переноса строк
             st.table(
                 df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT',
                                        ascending=True)[display_columns]
