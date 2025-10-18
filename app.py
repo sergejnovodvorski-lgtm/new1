@@ -16,17 +16,20 @@ WORKSHEET_NAME_ORDERS = "ЗАЯВКИ"
 WORKSHEET_NAME_PRICE = "ПРАЙС"
 
 
+# ВАЖНО: Колонка в Google Sheets называется "ДАТА ДОСТАВКИ" (с пробелом)
+DELIVERY_DATE_COLUMN_NAME = "ДАТА ДОСТАВКИ" 
+
+
 EXPECTED_HEADERS = [
     "ДАТА_ВВОДА",
     "НОМЕР_ЗАЯВКИ",
     "ТЕЛЕФОН",
     "АДРЕС",
-    "ДАТА ДОСТАВКИ", 
+    DELIVERY_DATE_COLUMN_NAME, 
     "КОММЕНТАРИЙ",
     "ЗАКАЗ",
     "СУММА"
 ]
-DELIVERY_DATE_COLUMN_NAME = "ДАТА ДОСТАВКИ" # Используем это имя везде
 
 
 # Индекс столбца для сортировки/вставки: ДАТА ДОСТАВКИ (Е)
@@ -39,9 +42,8 @@ TIME_STEP_SECONDS = 1800
 
 # --- ФОРМАТЫ ДАТЫ ---
 SHEET_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
-DISPLAY_DATETIME_FORMAT = 'DD.MM.YYYY HH:mm'
 PARSE_DATETIME_FORMAT = '%d.%m.%Y %H:%M:%S'
-# ✅ КОРРЕКТИРОВКА 1: Исправлено '%М' на '%M'
+# Исправлено %М на %M для минут
 DISPLAY_DATE_FORMAT = '%d.%m.%Y %H:%M' 
 
 
@@ -173,7 +175,7 @@ def parse_order_text_to_items(order_text: str) -> List[Dict[str, Any]]:
             qty = int(match.group(2))
             price_str_raw = match.group(3)
             
-            # Корректировка: Более надежный парсинг цены
+            # Более надежный парсинг цены
             price_str_cleaned = price_str_raw.replace(' ', "").replace(',', '.')
             price_str = re.sub(r'[^\d.]', '', price_str_cleaned)
             
@@ -470,22 +472,33 @@ def main():
                 default_delivery_time = get_default_delivery_time()
 
 
-        col1, col2 = st.columns(2)
+        # ✅ ИСПРАВЛЕНИЕ: Изменяем соотношение колонок для Номера Заявки и Телефона 
+        # (например, 1:3) для расширения поля телефона
+        col1, col2 = st.columns([1, 3])
         col3, col4 = st.columns(2)
 
 
         with col1:
-            order_number = st.text_input(
-                "Номер Заявки",
-                value=default_order_number,
-                key=f'order_number_{st.session_state.app_mode}_{form_key}',
-                disabled=(st.session_state.app_mode == 'edit') and st.session_state.loaded_order_data is not None # Можно сделать disabled
-            )
+            if st.session_state.app_mode == 'new':
+                order_number = st.text_input(
+                    "Номер Заявки",
+                    value=default_order_number,
+                    key=f'order_number_new_{form_key}'
+                )
+            else:
+                order_number = st.text_input(
+                    "Номер Заявки",
+                    value=default_order_number,
+                    key=f'order_number_edit_{form_key}',
+                    disabled=True 
+                )
                 
         with col2:
-            client_phone = st.text_input(
+            # ✅ ИСПРАВЛЕНИЕ: Используем st.text_area с минимальной высотой для расширения поля ввода телефона
+            client_phone = st.text_area(
                 "Телефон Клиента (с 7)",
                 value=default_client_phone,
+                height=30, # Устанавливаем минимальную высоту, чтобы выглядело как однострочный ввод
                 key=f'client_phone_{form_key}'
             )
 
@@ -639,8 +652,9 @@ def main():
         st.subheader("Завершение Заявки")
 
 
-        client_phone_value = st.session_state.get(f'client_phone_{form_key}', default_client_phone)
-        valid_phone = is_valid_phone(client_phone_value)
+        # Приводим значение text_area к строке и удаляем лишние пробелы/переносы
+        phone_input = st.session_state.get(f'client_phone_{form_key}', default_client_phone).strip().replace('\n', '')
+        valid_phone = is_valid_phone(phone_input)
         
         is_ready_to_send = (
             order_number and
@@ -653,7 +667,7 @@ def main():
         if not is_ready_to_send:
             missing_fields = []
             if not order_number: missing_fields.append("Номер Заявки")
-            if not client_phone: missing_fields.append("Телефон Клиента")
+            if not phone_input: missing_fields.append("Телефон Клиента")
             elif not valid_phone: missing_fields.append("Телефон (неверный формат 7XXXXXXXXXX)")
             if not address: missing_fields.append("Адрес Доставки")
             if not st.session_state.calculator_items: missing_fields.append("Состав Заказа")
@@ -709,7 +723,6 @@ def main():
                 st.rerun()
 
 
-        # Ссылка WhatsApp
         if is_ready_to_send:
             whatsapp_data = {
                 'НОМЕР_ЗАЯВКИ': order_number,
@@ -753,6 +766,7 @@ def main():
 
 
             df_display['ДАТА_ВВОДА_ОТОБРАЖЕНИЕ'] = df_display['ДАТА_ВВОДА'].apply(format_datetime_for_display)
+            
             df_display['ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ'] = df_display[DELIVERY_DATE_COLUMN_NAME].apply(format_datetime_for_display)
 
 
@@ -760,6 +774,11 @@ def main():
                 df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], format=PARSE_DATETIME_FORMAT, errors='coerce')
             except:
                 df_display['ДАТА_ДОСТАВКИ_DT'] = pd.to_datetime(df_display[DELIVERY_DATE_COLUMN_NAME], errors='coerce')
+            
+            # Заменяем \n на HTML-тег <br> для переноса строк в ячейке ЗАКАЗ
+            df_display['ЗАКАЗ_HTML'] = df_display['ЗАКАЗ'].str.replace('\n', '<br>', regex=False)
+
+
 
 
             # 2. Поиск и фильтрация
@@ -780,27 +799,25 @@ def main():
             # 3. Визуально красивый вывод с исправленными датами
             display_columns = [
                 'ДАТА_ВВОДА_ОТОБРАЖЕНИЕ', 'НОМЕР_ЗАЯВКИ', 'ТЕЛЕФОН', 'АДРЕС',
-                'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ', 'СУММА'
+                'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ', 'КОММЕНТАРИЙ', 'ЗАКАЗ_HTML', 'СУММА'
             ]
             
-            # ✅ КОРРЕКТИРОВКА 2: Возвращено st.dataframe для поддержки настройки ширины и улучшенного переноса текста
             st.dataframe(
                 df_display.sort_values(by='ДАТА_ДОСТАВКИ_DT',
                                        ascending=True)[display_columns],
                 column_config={
-                    'ДАТА_ВВОДА_ОТОБРАЖЕНИЕ': st.column_config.Column("Ввод", width="small"),
-                    'НОМЕР_ЗАЯВКИ': st.column_config.Column("№ Заявки", width="small"),
-                    # ✅ КОРРЕКТИРОВКА 3: Расширено поле ТЕЛЕФОН
-                    'ТЕЛЕФОН': st.column_config.Column("Телефон", width="medium"), 
-                    'АДРЕС': st.column_config.Column("Адрес", width="large"),
-                    'ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ': st.column_config.Column("Доставка", width="medium"),
-                    'КОММЕНТАРИЙ': st.column_config.Column("Общий комм.", width="medium"),
-                    # Установлена большая ширина для ЗАКАЗ для улучшения переноса текста
-                    'ЗАКАЗ': st.column_config.Column("Заказ (Позиции)", width="large"), 
-                    'СУММА': st.column_config.NumberColumn("СУММА", format="%.2f РУБ.", width="small")
+                    "ДАТА_ВВОДА_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("Введено", width="small"),
+                    "НОМЕР_ЗАЯВКИ": st.column_config.TextColumn("№ Заявки", width="small"),
+                    "ТЕЛЕФОН": st.column_config.TextColumn("📞 Телефон", width="medium"), 
+                    "АДРЕС": st.column_config.TextColumn("📍 Адрес", width="large"),
+                    "ДАТА_ДОСТАВКИ_ОТОБРАЖЕНИЕ": st.column_config.TextColumn("️🚚 Доставка", width="medium"),
+                    "КОММЕНТАРИЙ": st.column_config.TextColumn("📝 Общий комм.", width="medium"),
+                    "ЗАКАЗ_HTML": st.column_config.Column("🛒 Состав Заказа", width="large", is_html=True), 
+                    "СУММА": st.column_config.NumberColumn("💰 Сумма", format="%.2f РУБ.", width="small")
                 },
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                height=600
             )
 
 
